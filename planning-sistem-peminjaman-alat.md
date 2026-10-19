@@ -1,6 +1,8 @@
 # Planning Sistem — Aplikasi Peminjaman Alat
 **Stack: Next.js 16 (App Router, TypeScript, Turbopack) + Supabase (PostgreSQL, Auth, RLS)**
 
+> **Revisi:** Alur pengurangan stok diperbaiki menjadi pola **atomic reserve-then-release** (lihat bagian 7b & 8) untuk menghindari bug double-decrement dan race condition saat dua peminjam mengajukan alat yang sama secara bersamaan.
+
 ---
 
 ## 1. Ringkasan Proyek
@@ -102,11 +104,15 @@ loans (peminjaman)
 ├── approved_by (FK -> users.id, nullable)
 
 returns (pengembalian)
-├── id (uuid, PK)
+├── id (text/uuid, PK)
 ├── loan_id (FK -> loans.id)
 ├── returned_at (timestamptz)
-├── condition_after (enum)
-├── fine_amount (numeric, default 0)
+├── condition_after (enum: 'baik' | 'rusak_ringan' | 'rusak_berat')
+├── late_fine (denda_keterlambatan: numeric, default 0)
+├── damage_fine (denda_kerusakan: numeric, default 0)
+├── fine_amount (jumlah_denda: total gabungan, numeric, default 0)
+├── payment_status (status_pembayaran: enum 'lunas' | 'belum_lunas' | 'bebas_denda')
+├── notes (catatan: text, nullable)
 ├── verified_by (FK -> users.id, nullable)
 
 activity_logs
@@ -240,89 +246,163 @@ Start → Input email/password → Submit ke Supabase Auth
 
 **b. Proses Peminjaman Alat**
 ```
-Start (Peminjam) → Pilih alat → Cek stock_available > 0?
-  Tidak → Tampilkan "Stok habis" → End
-  Ya → Input jumlah & tanggal pengembalian → Submit
-     → Server Action validasi (Zod) → Insert ke loans (status: pending)
-     → Kurangi stock_available sementara (reservasi) → Notifikasi ke Petugas
-     → End
+Start (Peminjam) → Pilih alat → Input jumlah & tanggal pengembalian → Submit
+  → Server Action validasi (Zod) → Panggil RPC fn_request_loan()
+     (cek stock_available >= qty DAN kurangi stok dalam satu statement atomic)
+  → Berhasil?
+     Tidak (stok tidak cukup) → Tampilkan "Stok tidak mencukupi" → End
+     Ya → loans terisi (status: pending), stok sudah tereservasi
+        → Notifikasi ke Petugas → End
 ```
+*Catatan: stok direservasi saat pengajuan (bukan saat approve). Jika petugas menolak, stok dikembalikan otomatis lewat trigger (lihat bagian 8) — bukan dikurangi lagi saat approve.*
 
-**c. Proses Pengembalian & Perhitungan Denda**
+**c. Proses Pengembalian & Perhitungan Denda Multi-Komponen**
 ```
 Start (Peminjam ajukan kembali) → Petugas cek kondisi fisik alat
-  → Input condition_after
-  → Sistem hitung: hari_telat = today - due_date
-     hari_telat > 0? 
-        Ya → fine_amount = hari_telat × tarif_denda_per_hari
-        Tidak → fine_amount = 0
-  → Insert ke returns → Update loans.status = 'returned'
+  → Petugas pilih condition_after ('baik' | 'rusak_ringan' | 'rusak_berat')
+  → Sistem hitung denda keterlambatan otomatis:
+      hari_telat = greatest(0, today - due_date)
+      denda_telat = hari_telat × tarif_per_hari × quantity
+  → Kondisi fisik rusak?
+      Ya → Petugas input taksiran biaya kerusakan riil + catatan
+      Tidak → denda_kerusakan = 0
+  → Total Denda = denda_telat + denda_kerusakan
+  → Total Denda > 0?
+      Ya → Petugas pilih status_pembayaran ('lunas' / 'belum_lunas' / 'bebas_denda')
+      Tidak → status_pembayaran = 'lunas'
+  → Simpan ke returns (atomic) → Update loans.status = 'returned'
   → Update tools.stock_available += quantity
-  → Insert activity_logs
-  → End
+  → Insert activity_logs → End
 ```
+*Catatan: Sistem menerapkan Human-in-the-loop: Keterlambatan dihitung otomatis oleh sistem, sedangkan biaya kerusakan di-asses langsung oleh petugas sesuai kondisi fisik lapangan.*
 
 ---
 
 ## 8. Database Layer — Trigger, Function, Stored Procedure
 
-Sesuai instruksi soal (poin 6), berikut contoh implementasi di Supabase:
+Sesuai instruksi soal (poin 6), berikut contoh implementasi di Supabase.
 
-**Function + Trigger: auto-update stock saat approve**
+**Prinsip (standar industri — atomic reserve-then-release):**
+- Stok hanya boleh dimutasi lewat **satu jalur**, dalam **satu transaksi atomic** — bukan tersebar di beberapa function/trigger untuk event yang berbeda.
+- Reservasi terjadi **saat pengajuan** (`pending`), bukan saat approve — supaya approve tidak perlu menyentuh stok lagi.
+- Cek-dan-kurangi dilakukan dalam **satu statement `UPDATE ... WHERE`**, bukan *read-then-write* terpisah, supaya bebas race condition saat dua peminjam mengajukan alat yang sama bersamaan.
+- `CHECK constraint` di level DB sebagai jaring pengaman terakhir kalau ada bug di logic aplikasi.
+
 ```sql
-create or replace function fn_decrease_stock_on_approve()
+-- Jaring pengaman: stok tidak boleh negatif
+alter table tools
+  add constraint chk_stock_non_negative check (stock_available >= 0);
+```
+
+**Function: satu-satunya jalur untuk membuat pengajuan peminjaman (reservasi atomic)**
+```sql
+create or replace function fn_request_loan(
+  p_borrower_id uuid,
+  p_tool_id uuid,
+  p_quantity int,
+  p_due_date date
+) returns uuid
+language plpgsql
+as $$
+declare
+  v_loan_id uuid;
+  v_rows_affected int;
+begin
+  -- Atomic check-and-decrement: baca & kurangi dalam satu statement
+  update tools
+  set stock_available = stock_available - p_quantity
+  where id = p_tool_id
+    and stock_available >= p_quantity;
+
+  get diagnostics v_rows_affected = row_count;
+
+  if v_rows_affected = 0 then
+    raise exception 'Stok tidak mencukupi';
+  end if;
+
+  insert into loans (borrower_id, tool_id, quantity, status, due_date, requested_at)
+  values (p_borrower_id, p_tool_id, p_quantity, 'pending', p_due_date, now())
+  returning id into v_loan_id;
+
+  return v_loan_id;
+exception when others then
+  raise; -- transaksi otomatis rollback (update tools + insert loans batal bersama)
+end;
+$$;
+```
+
+**Trigger: kembalikan stok hanya saat pengajuan ditolak** (approve tidak lagi menyentuh stok — sudah direservasi di atas)
+```sql
+create or replace function fn_release_stock_on_reject()
 returns trigger as $$
 begin
-  if new.status = 'approved' and old.status = 'pending' then
+  if new.status = 'rejected' and old.status = 'pending' then
     update tools
-    set stock_available = stock_available - new.quantity
+    set stock_available = stock_available + new.quantity
     where id = new.tool_id;
-    new.borrowed_at = now();
   end if;
   return new;
 end;
 $$ language plpgsql;
 
-create trigger trg_decrease_stock
+create trigger trg_release_stock
 before update on loans
-for each row execute function fn_decrease_stock_on_approve();
+for each row execute function fn_release_stock_on_reject();
 ```
 
-**Function: hitung denda otomatis (dipanggil dari Server Action)**
+**Function: hitung denda keterlambatan otomatis (berdasarkan kuantitas)**
 ```sql
 create or replace function fn_calculate_fine(p_loan_id uuid)
 returns numeric as $$
 declare
   v_due_date date;
+  v_qty int;
   v_days_late int;
-  v_rate numeric := 5000; -- tarif per hari, sesuaikan kebutuhan
+  v_rate numeric := 5000; -- tarif per hari per unit
 begin
-  select due_date into v_due_date from loans where id = p_loan_id;
+  select due_date, quantity into v_due_date, v_qty from loans where id = p_loan_id;
   v_days_late := greatest(0, (current_date - v_due_date));
-  return v_days_late * v_rate;
+  return v_days_late * v_rate * coalesce(v_qty, 1);
 end;
 $$ language plpgsql;
 ```
 
-**Stored Procedure (transaksi commit/rollback): proses pengembalian**
+**Stored Procedure / Function: proses pengembalian multi-komponen & transaksi atomic**
 ```sql
 create or replace procedure sp_process_return(
   p_loan_id uuid,
   p_condition text,
-  p_verified_by uuid
+  p_damage_fee numeric default 0,
+  p_payment_status text default 'lunas',
+  p_notes text default null,
+  p_verified_by uuid default null
 )
 language plpgsql
 as $$
 declare
-  v_fine numeric;
+  v_late_fine numeric;
+  v_damage_fine numeric := 0;
+  v_total_fine numeric;
   v_tool_id uuid;
   v_qty int;
 begin
-  select fn_calculate_fine(p_loan_id) into v_fine;
+  select fn_calculate_fine(p_loan_id) into v_late_fine;
   select tool_id, quantity into v_tool_id, v_qty from loans where id = p_loan_id;
 
-  insert into returns (loan_id, returned_at, condition_after, fine_amount, verified_by)
-  values (p_loan_id, now(), p_condition, v_fine, p_verified_by);
+  if p_condition <> 'baik' then
+    v_damage_fine := greatest(0, coalesce(p_damage_fee, 0));
+  end if;
+
+  v_total_fine := v_late_fine + v_damage_fine;
+
+  insert into returns (
+    loan_id, returned_at, condition_after, 
+    late_fine, damage_fine, fine_amount, payment_status, notes, verified_by
+  )
+  values (
+    p_loan_id, now(), p_condition, 
+    v_late_fine, v_damage_fine, v_total_fine, p_payment_status, p_notes, p_verified_by
+  );
 
   update loans set status = 'returned' where id = p_loan_id;
   update tools set stock_available = stock_available + v_qty where id = v_tool_id;
@@ -347,6 +427,7 @@ $$;
   ```
 - Index kolom yang sering di-filter: `tool_id`, `borrower_id`, `status`
 - Gunakan `count: 'exact'` hanya saat perlu total row (mahal), bukan di setiap fetch
+- Pengajuan peminjaman **wajib** lewat `supabase.rpc('fn_request_loan', {...})`, bukan `.insert()` langsung ke tabel `loans` — supaya logic reservasi atomic di bagian 8 tidak bisa dilewati dari client
 
 ---
 
@@ -356,10 +437,12 @@ $$;
 |---|---|---|---|
 | 1 | Login user salah | username/password salah | Gagal login, muncul notifikasi error |
 | 2 | Tambah alat | Data alat valid (Admin) | Alat tersimpan, muncul di daftar |
-| 3 | Pinjam alat stok habis | Ajukan pinjam alat stock_available = 0 | Ditolak sistem, notifikasi "stok habis" |
+| 3 | Pinjam alat stok habis | Ajukan pinjam alat stock_available = 0 | RPC `fn_request_loan` gagal (`Stok tidak mencukupi`), tidak ada baris loans baru |
 | 4 | Kembalikan alat telat | Return setelah due_date | fine_amount terhitung otomatis sesuai hari telat |
 | 5 | Akses privilege | Peminjam akses `/admin/users` | Ditolak (redirect / 403), RLS juga menolak query langsung |
-| 6 | Approve peminjaman | Petugas approve loan pending | Status jadi approved, stock_available berkurang |
+| 6 | Approve peminjaman | Petugas approve loan pending | Status jadi approved, stock_available **tidak berubah** (sudah direservasi saat pengajuan) |
+| 7 | Tolak peminjaman | Petugas reject loan pending | Status jadi rejected, stock_available bertambah kembali (dilepas oleh trigger) |
+| 8 | Race condition stok terakhir | 2 peminjam ajukan alat stock_available = 1 bersamaan | Hanya 1 yang berhasil (loans terbuat), 1 lagi gagal dengan "Stok tidak mencukupi" |
 
 ---
 
@@ -390,5 +473,3 @@ $$;
 - [ ] Screenshot hasil pengujian per skenario di bagian 10
 
 ---
-
-Kalau kamu mau, langkah selanjutnya bisa aku bantu bikinkan: skema SQL lengkap siap-jalan (`schema.sql`) untuk langsung di-push ke Supabase, atau setup awal project Next.js + struktur folder di atas.
