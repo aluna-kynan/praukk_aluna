@@ -102,6 +102,8 @@ create table peminjaman (
   alat_id             text not null references alat(id) on delete restrict,
   jumlah              int not null check (jumlah > 0),
   status              status_peminjaman not null default 'diajukan',
+  status_pengembalian text check (status_pengembalian is null or status_pengembalian in ('menunggu_verifikasi', 'selesai')),
+  pengembalian_diajukan_pada timestamptz,
   tanggal_pinjam      timestamptz,
   tanggal_jatuh_tempo date not null,
   diajukan_pada       timestamptz not null default now(),
@@ -281,6 +283,36 @@ end;
 $$;
 
 -- =====================================================================
+-- 8. FUNCTION — peminjam mengajukan pengembalian untuk ditinjau petugas
+-- =====================================================================
+create or replace function fn_ajukan_pengembalian(p_peminjaman_id text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if fn_peran_saya() is distinct from 'peminjam'::peran_pengguna then
+    raise exception 'Hanya peminjam yang boleh mengajukan pengembalian';
+  end if;
+
+  update peminjaman
+  set status_pengembalian = 'menunggu_verifikasi',
+      pengembalian_diajukan_pada = now()
+  where id = p_peminjaman_id
+    and peminjam_id = auth.uid()
+    and status in ('disetujui', 'terlambat')
+    and status_pengembalian is null;
+
+  if not found then
+    raise exception 'Peminjaman tidak ditemukan, belum aktif, atau pengembalian sudah diajukan';
+  end if;
+
+  perform fn_catat_log('mengajukan pengembalian', 'peminjaman', p_peminjaman_id);
+end;
+$$;
+
+-- =====================================================================
 -- 9. FUNCTION — hitung denda keterlambatan (otomatis berdasarkan kuantitas)
 -- =====================================================================
 create or replace function fn_hitung_denda(p_peminjaman_id text)
@@ -326,16 +358,18 @@ declare
   v_jumlah       int;
   v_status_bayar status_pembayaran_denda;
 begin
-  if fn_peran_saya() not in ('petugas', 'admin') then
+  if fn_peran_saya() is null or fn_peran_saya() not in ('petugas', 'admin') then
     raise exception 'Tidak memiliki izin memproses pengembalian';
   end if;
 
   select alat_id, jumlah into v_alat_id, v_jumlah
   from peminjaman
-  where id = p_peminjaman_id and status = 'disetujui';
+  where id = p_peminjaman_id
+    and status in ('disetujui', 'terlambat')
+    and status_pengembalian = 'menunggu_verifikasi';
 
   if v_alat_id is null then
-    raise exception 'Peminjaman tidak ditemukan atau belum disetujui';
+    raise exception 'Pengajuan pengembalian tidak ditemukan atau sudah diproses';
   end if;
 
   -- 1. Hitung denda keterlambatan otomatis
@@ -379,7 +413,10 @@ begin
     auth.uid()
   );
 
-  update peminjaman set status = 'dikembalikan' where id = p_peminjaman_id;
+  update peminjaman
+  set status = 'dikembalikan',
+      status_pengembalian = 'selesai'
+  where id = p_peminjaman_id;
   update alat set stok_tersedia = stok_tersedia + v_jumlah where id = v_alat_id;
 
   perform fn_catat_log('memproses pengembalian', 'peminjaman', p_peminjaman_id);

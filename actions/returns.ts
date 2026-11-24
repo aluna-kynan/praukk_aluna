@@ -11,34 +11,84 @@ export interface ProcessReturnParams {
   catatan?: string;
 }
 
+export async function requestReturnAction(peminjaman_id: string) {
+  if (typeof peminjaman_id !== "string" || !peminjaman_id.trim()) {
+    return { error: "ID peminjaman tidak valid." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("fn_ajukan_pengembalian", {
+    p_peminjaman_id: peminjaman_id.trim(),
+  });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/my-loans");
+  revalidatePath("/monitoring");
+  return { success: true };
+}
+
 export async function processReturnAction(
   peminjaman_id: string,
   paramsOrKondisi: KondisiAlat | ProcessReturnParams
 ) {
+  if (typeof peminjaman_id !== "string" || !peminjaman_id.trim()) {
+    return { error: "ID peminjaman tidak valid." };
+  }
+  if (
+    paramsOrKondisi == null ||
+    (typeof paramsOrKondisi !== "string" && typeof paramsOrKondisi !== "object")
+  ) {
+    return { error: "Data pemeriksaan pengembalian tidak valid." };
+  }
+
   const supabase = await createClient();
 
-  // Normalize parameters (backward compatible if only string kondisi passed)
   const params: ProcessReturnParams =
     typeof paramsOrKondisi === "string"
       ? { kondisi_setelah: paramsOrKondisi }
       : paramsOrKondisi;
 
-  const kondisi = params.kondisi_setelah;
-  const dendaKerusakanInput = kondisi === "baik" ? 0 : Math.max(0, Number(params.denda_kerusakan) || 0);
-  const catatanInput = params.catatan?.trim() || null;
-
-  // 1. Ambil data peminjaman untuk perhitungan denda keterlambatan (qty-aware)
-  const { data: loan, error: loanFetchError } = await supabase
-    .from("peminjaman")
-    .select("*, alat:alat_id(id, stok_tersedia)")
-    .eq("id", peminjaman_id)
-    .single();
-
-  if (loanFetchError || !loan) {
-    return { error: "Peminjaman tidak ditemukan atau data korup." };
+  if (params.catatan != null && typeof params.catatan !== "string") {
+    return { error: "Catatan pemeriksaan tidak valid." };
   }
 
-  // Hitung keterlambatan (Rp 5.000 / hari / unit)
+  const kondisi = params.kondisi_setelah;
+  if (!["baik", "rusak_ringan", "rusak_berat"].includes(kondisi)) {
+    return { error: "Kondisi alat tidak valid." };
+  }
+
+  const dendaKerusakanInput = Number(params.denda_kerusakan ?? 0);
+  if (!Number.isFinite(dendaKerusakanInput) || dendaKerusakanInput < 0) {
+    return { error: "Denda kerusakan harus berupa angka nol atau lebih." };
+  }
+
+  const allowedPaymentStatuses: StatusPembayaranDenda[] = ["lunas", "belum_lunas", "bebas_denda"];
+  if (params.status_pembayaran && !allowedPaymentStatuses.includes(params.status_pembayaran)) {
+    return { error: "Status pembayaran denda tidak valid." };
+  }
+
+  const normalizedDamageFine = kondisi === "baik" ? 0 : dendaKerusakanInput;
+  const catatanInput = params.catatan?.trim() || null;
+
+  const { data: loan, error: loanFetchError } = await supabase
+    .from("peminjaman")
+    .select("id, status, status_pengembalian, tanggal_jatuh_tempo, jumlah")
+    .eq("id", peminjaman_id.trim())
+    .single();
+
+  if (loanFetchError) {
+    return { error: loanFetchError.message };
+  }
+  if (!loan) {
+    return { error: "Peminjaman tidak ditemukan atau data korup." };
+  }
+  if (loan.status_pengembalian !== "menunggu_verifikasi") {
+    return { error: "Peminjam belum mengajukan pengembalian atau pengajuan sudah diproses." };
+  }
+
   const dueDate = new Date(loan.tanggal_jatuh_tempo);
   const today = new Date();
   dueDate.setHours(0, 0, 0, 0);
@@ -46,76 +96,23 @@ export async function processReturnAction(
   const diffDays = Math.max(0, Math.ceil((today.getTime() - dueDate.getTime()) / (1000 * 3600 * 24)));
   const loanQty = Number(loan.jumlah) || 1;
   const dendaTelat = diffDays * 5000 * loanQty;
-  const totalDenda = dendaTelat + dendaKerusakanInput;
+  const totalDenda = dendaTelat + normalizedDamageFine;
 
-  // Tentukan status pembayaran
   let statusBayar: StatusPembayaranDenda = "lunas";
   if (totalDenda > 0) {
     statusBayar = params.status_pembayaran || "lunas";
   }
 
-  // 2. Coba jalankan lewat Stored Function PostgreSQL RPC (atomic & transaction-safe)
   const { error: rpcError } = await supabase.rpc("fn_proses_pengembalian", {
-    p_peminjaman_id: peminjaman_id,
+    p_peminjaman_id: peminjaman_id.trim(),
     p_kondisi: kondisi,
-    p_denda_kerusakan: dendaKerusakanInput,
+    p_denda_kerusakan: normalizedDamageFine,
     p_status_pembayaran: statusBayar,
     p_catatan: catatanInput,
   });
 
-  if (!rpcError) {
-    revalidatePath("/monitoring");
-    revalidatePath("/my-loans");
-    revalidatePath("/reports");
-    return {
-      success: true,
-      dendaTelat,
-      dendaKerusakan: dendaKerusakanInput,
-      totalDenda,
-      statusBayar,
-    };
-  }
-
-  // 3. Fallback direct logic jika RPC belum diperbarui di remote Supabase
-  console.warn("RPC fn_proses_pengembalian gagal/beda signature, menggunakan fallback direct DB:", rpcError.message);
-
-  // Coba insert dengan skema baru lengkap
-  let returnInsertResult = await supabase.from("pengembalian").insert({
-    peminjaman_id,
-    kondisi_setelah: kondisi,
-    denda_keterlambatan: dendaTelat,
-    denda_kerusakan: dendaKerusakanInput,
-    jumlah_denda: totalDenda,
-    status_pembayaran: statusBayar,
-    catatan: catatanInput,
-  });
-
-  // Jika gagal karena kolom baru belum di-alter di Supabase user, fallback ke kolom dasar
-  if (returnInsertResult.error) {
-    console.warn("Fallback ke skema pengembalian standar:", returnInsertResult.error.message);
-    const basicInsert = await supabase.from("pengembalian").insert({
-      peminjaman_id,
-      kondisi_setelah: kondisi,
-      jumlah_denda: totalDenda,
-    });
-
-    if (basicInsert.error) {
-      return { error: basicInsert.error.message };
-    }
-  }
-
-  // Update status peminjaman menjadi 'dikembalikan'
-  await supabase
-    .from("peminjaman")
-    .update({ status: "dikembalikan" })
-    .eq("id", peminjaman_id);
-
-  // Kembalikan stok alat
-  if (loan.alat) {
-    await supabase
-      .from("alat")
-      .update({ stok_tersedia: loan.alat.stok_tersedia + loan.jumlah })
-      .eq("id", loan.alat.id);
+  if (rpcError) {
+    return { error: rpcError.message };
   }
 
   revalidatePath("/monitoring");
@@ -125,7 +122,7 @@ export async function processReturnAction(
   return {
     success: true,
     dendaTelat,
-    dendaKerusakan: dendaKerusakanInput,
+    dendaKerusakan: normalizedDamageFine,
     totalDenda,
     statusBayar,
   };

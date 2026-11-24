@@ -8,6 +8,8 @@ export function getStatusBadgeInfo(status: StatusPeminjaman | string) {
     case 'disetujui':
     case 'approved':
       return { label: 'Disetujui', variant: 'outline' as const, className: 'bg-green-500/10 text-green-600 border-green-500/20' };
+    case 'pengembalian_diajukan':
+      return { label: 'Menunggu Verifikasi Pengembalian', variant: 'outline' as const, className: 'bg-amber-500/10 text-amber-600 border-amber-500/20' };
     case 'ditolak':
     case 'rejected':
       return { label: 'Ditolak', variant: 'outline' as const, className: 'bg-red-500/10 text-red-600 border-red-500/20' };

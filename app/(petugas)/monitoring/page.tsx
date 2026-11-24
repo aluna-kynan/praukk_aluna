@@ -49,7 +49,7 @@ export default function MonitoringPage() {
   const [loans, setLoans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeFilter, setTimeFilter] = useState<TimeFilterOption>("this_month");
-  const [statusTab, setStatusTab] = useState<"all" | "dipinjam" | "dikembalikan" | "piutang">("all");
+  const [statusTab, setStatusTab] = useState<"all" | "menunggu_verifikasi" | "dipinjam" | "dikembalikan" | "piutang">("all");
 
   // Return modal state
   const [selectedLoan, setSelectedLoan] = useState<any | null>(null);
@@ -129,7 +129,11 @@ export default function MonitoringPage() {
     const data = await getLoansAction();
     // Filter active or returned loans
     const filtered = (data || []).filter(
-      (l) => l.status === "disetujui" || l.status === "dikembalikan" || l.status === "terlambat"
+      (l) =>
+        l.status === "disetujui" ||
+        l.status === "dikembalikan" ||
+        l.status === "terlambat" ||
+        l.status_pengembalian === "menunggu_verifikasi"
     );
     setLoans(filtered);
     setLoading(false);
@@ -142,15 +146,26 @@ export default function MonitoringPage() {
   // Filter based on date
   const dateFilteredLoans = useMemo(() => {
     return loans.filter((l) => {
-      const d = l.created_at || l.tanggal_pinjam || l.tanggal_jatuh_tempo;
+      const d =
+        (l.status_pengembalian === "menunggu_verifikasi" && l.pengembalian_diajukan_pada) ||
+        l.created_at ||
+        l.tanggal_pinjam ||
+        l.tanggal_jatuh_tempo;
       return isDateInFilter(d, timeFilter);
     });
   }, [loans, timeFilter]);
 
   // Filter based on tab
   const displayedLoans = useMemo(() => {
+    if (statusTab === "menunggu_verifikasi") {
+      return dateFilteredLoans.filter((l) => l.status_pengembalian === "menunggu_verifikasi");
+    }
     if (statusTab === "dipinjam") {
-      return dateFilteredLoans.filter((l) => l.status === "disetujui");
+      return dateFilteredLoans.filter(
+        (l) =>
+          (l.status === "disetujui" || l.status === "terlambat") &&
+          l.status_pengembalian !== "menunggu_verifikasi"
+      );
     }
     if (statusTab === "dikembalikan") {
       return dateFilteredLoans.filter((l) => l.status === "dikembalikan");
@@ -165,7 +180,14 @@ export default function MonitoringPage() {
 
   // Aggregate stats
   const stats = useMemo(() => {
-    const dipinjam = dateFilteredLoans.filter((l) => l.status === "disetujui").length;
+    const menungguVerifikasi = dateFilteredLoans.filter(
+      (l) => l.status_pengembalian === "menunggu_verifikasi"
+    ).length;
+    const dipinjam = dateFilteredLoans.filter(
+      (l) =>
+        (l.status === "disetujui" || l.status === "terlambat") &&
+        l.status_pengembalian !== "menunggu_verifikasi"
+    ).length;
     const dikembalikan = dateFilteredLoans.filter((l) => l.status === "dikembalikan").length;
     
     let totalDendaLunas = 0;
@@ -183,7 +205,7 @@ export default function MonitoringPage() {
       }
     });
 
-    return { dipinjam, dikembalikan, totalDendaLunas, totalDendaTertunggak };
+    return { menungguVerifikasi, dipinjam, dikembalikan, totalDendaLunas, totalDendaTertunggak };
   }, [dateFilteredLoans, getReturnData]);
 
   // Real-time calculation for modal
@@ -353,7 +375,7 @@ export default function MonitoringPage() {
           </div>
 
           {/* Quick Filter Tabs */}
-          <div className="flex items-center gap-1 bg-background p-1 rounded-lg border border-border/60">
+          <div className="flex flex-wrap items-center gap-1 bg-background p-1 rounded-lg border border-border/60">
             <Button
               size="sm"
               variant={statusTab === "all" ? "default" : "ghost"}
@@ -361,6 +383,14 @@ export default function MonitoringPage() {
               onClick={() => setStatusTab("all")}
             >
               Semua ({dateFilteredLoans.length})
+            </Button>
+            <Button
+              size="sm"
+              variant={statusTab === "menunggu_verifikasi" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => setStatusTab("menunggu_verifikasi")}
+            >
+              Menunggu Verifikasi ({stats.menungguVerifikasi})
             </Button>
             <Button
               size="sm"
@@ -411,7 +441,11 @@ export default function MonitoringPage() {
               <TableBody>
                 {displayedLoans.length > 0 ? (
                   displayedLoans.map((loan) => {
-                    const statusInfo = getStatusBadgeInfo(loan.status);
+                    const statusInfo = getStatusBadgeInfo(
+                      loan.status_pengembalian === "menunggu_verifikasi"
+                        ? "pengembalian_diajukan"
+                        : loan.status
+                    );
                     const ret = getReturnData(loan);
                     const fineTotal = ret ? Number(ret.jumlah_denda) || 0 : 0;
                     const fineStatus = ret?.status_pembayaran || (fineTotal > 0 ? "belum_lunas" : "lunas");
@@ -501,15 +535,19 @@ export default function MonitoringPage() {
                               <Eye className="h-3.5 w-3.5 mr-1" /> Detail
                             </Button>
 
-                            {loan.status === "disetujui" ? (
+                            {loan.status_pengembalian === "menunggu_verifikasi" ? (
                               <Button 
                                 size="sm" 
                                 variant="outline" 
                                 className="h-8 border-primary text-primary hover:bg-primary/10 shadow-sm"
                                 onClick={() => handleOpenReturnModal(loan)}
                               >
-                                <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Proses Kembali
+                                <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Verifikasi Pengembalian
                               </Button>
+                            ) : loan.status === "disetujui" || loan.status === "terlambat" ? (
+                              <span className="px-2 py-1 text-xs text-muted-foreground">
+                                Menunggu pengajuan peminjam
+                              </span>
                             ) : ret && fineStatus === "belum_lunas" ? (
                               <Button
                                 size="sm"
@@ -804,8 +842,19 @@ export default function MonitoringPage() {
                   <CardTitle className="text-lg font-bold flex items-center gap-2">
                     <Eye className="h-5 w-5 text-primary" /> Pratinjau Detail Transaksi
                   </CardTitle>
-                  <Badge variant="outline" className={getStatusBadgeInfo(detailLoan.status).className}>
-                    {getStatusBadgeInfo(detailLoan.status).label}
+                  <Badge
+                    variant="outline"
+                    className={getStatusBadgeInfo(
+                      detailLoan.status_pengembalian === "menunggu_verifikasi"
+                        ? "pengembalian_diajukan"
+                        : detailLoan.status
+                    ).className}
+                  >
+                    {getStatusBadgeInfo(
+                      detailLoan.status_pengembalian === "menunggu_verifikasi"
+                        ? "pengembalian_diajukan"
+                        : detailLoan.status
+                    ).label}
                   </Badge>
                 </div>
                 <CardDescription className="text-xs mt-1">
@@ -949,8 +998,15 @@ export default function MonitoringPage() {
                         <Clock className="h-3.5 w-3.5 text-blue-500" /> Status Pengembalian Fisik
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Alat saat ini berstatus <strong>Sedang Dipinjam</strong> dan belum diverifikasi pengembaliannya ke gudang.
+                        {detailLoan.status_pengembalian === "menunggu_verifikasi"
+                          ? "Peminjam sudah mengajukan pengembalian. Periksa kondisi fisik alat sebelum menyelesaikan transaksi."
+                          : <>Alat saat ini berstatus <strong>Sedang Dipinjam</strong> dan belum ada pengajuan pengembalian.</>}
                       </p>
+                      {detailLoan.status_pengembalian === "menunggu_verifikasi" && detailLoan.pengembalian_diajukan_pada && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Diajukan pada {new Date(detailLoan.pengembalian_diajukan_pada).toLocaleString("id-ID")}
+                        </p>
+                      )}
                       {daysLate > 0 ? (
                         <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 flex items-start gap-2">
                           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -978,7 +1034,7 @@ export default function MonitoringPage() {
                 Tutup
               </Button>
               <div className="flex items-center gap-2">
-                {detailLoan.status === "disetujui" && (
+                {detailLoan.status_pengembalian === "menunggu_verifikasi" && (
                   <Button
                     size="sm"
                     className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
@@ -988,7 +1044,7 @@ export default function MonitoringPage() {
                       handleOpenReturnModal(target);
                     }}
                   >
-                    <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Proses Pengembalian Sekarang
+                    <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Verifikasi Pengembalian
                   </Button>
                 )}
                 {(() => {

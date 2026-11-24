@@ -1,6 +1,7 @@
 export type PeranPengguna = 'admin' | 'petugas' | 'peminjam';
 export type KondisiAlat = 'baik' | 'rusak_ringan' | 'rusak_berat';
 export type StatusPeminjaman = 'diajukan' | 'disetujui' | 'ditolak' | 'dikembalikan' | 'terlambat';
+export type StatusPengembalian = 'menunggu_verifikasi' | 'selesai' | null;
 export type StatusPembayaranDenda = 'lunas' | 'belum_lunas' | 'bebas_denda';
 
 export interface Pengguna {
@@ -34,6 +35,8 @@ export interface Peminjaman {
   alat_id: string;
   jumlah: number;
   status: StatusPeminjaman;
+  status_pengembalian: StatusPengembalian;
+  pengembalian_diajukan_pada: string | null;
   tanggal_pinjam: string | null;
   tanggal_jatuh_tempo: string;
   diajukan_pada: string;
@@ -140,6 +143,8 @@ export type Database = {
           alat_id: string;
           jumlah: number;
           status?: StatusPeminjaman;
+          status_pengembalian?: StatusPengembalian;
+          pengembalian_diajukan_pada?: string | null;
           tanggal_pinjam?: string | null;
           tanggal_jatuh_tempo: string;
           diajukan_pada?: string;
@@ -151,6 +156,8 @@ export type Database = {
           alat_id?: string;
           jumlah?: number;
           status?: StatusPeminjaman;
+          status_pengembalian?: StatusPengembalian;
+          pengembalian_diajukan_pada?: string | null;
           tanggal_pinjam?: string | null;
           tanggal_jatuh_tempo?: string;
           diajukan_pada?: string;
@@ -226,6 +233,12 @@ export type Database = {
         Returns: void;
       };
       fn_tolak_peminjaman: {
+        Args: {
+          p_peminjaman_id: string;
+        };
+        Returns: void;
+      };
+      fn_ajukan_pengembalian: {
         Args: {
           p_peminjaman_id: string;
         };

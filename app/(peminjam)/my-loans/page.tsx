@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { History, ArrowRight, Loader2, AlertCircle, CheckCircle2, Eye, X, Package, Calendar, FileText, AlertTriangle } from "lucide-react";
+import { History, ArrowRight, ArrowLeftRight, Loader2, AlertCircle, CheckCircle2, Eye, X, Package, Calendar, FileText, AlertTriangle, Clock } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { 
   Table, 
@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { getLoansAction } from "@/actions/loans";
+import { requestReturnAction } from "@/actions/returns";
 import { 
   getStatusBadgeInfo, 
   getKondisiBadgeInfo, 
@@ -26,10 +27,18 @@ export default function MyLoansPage() {
   const [loans, setLoans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailLoan, setDetailLoan] = useState<any | null>(null);
+  const [requestingReturnId, setRequestingReturnId] = useState<string | null>(null);
+  const [returnActionMessage, setReturnActionMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   const getReturnData = useCallback((loan: any) => {
     if (!loan?.pengembalian) return null;
     return Array.isArray(loan.pengembalian) ? loan.pengembalian[0] : loan.pengembalian;
+  }, []);
+
+  const getDisplayStatus = useCallback((loan: any) => {
+    return loan.status_pengembalian === "menunggu_verifikasi"
+      ? "pengembalian_diajukan"
+      : loan.status;
   }, []);
 
   const getDaysLate = useCallback((dueDateStr: string): number => {
@@ -67,6 +76,24 @@ export default function MyLoansPage() {
     const data = await getLoansAction();
     setLoans(data || []);
     setLoading(false);
+  };
+
+  const handleRequestReturn = async (loanId: string) => {
+    setRequestingReturnId(loanId);
+    setReturnActionMessage(null);
+
+    try {
+      const result = await requestReturnAction(loanId);
+      if (result.error) {
+        setReturnActionMessage({ text: result.error, type: "error" });
+        return;
+      }
+
+      setReturnActionMessage({ text: "Pengajuan pengembalian berhasil dikirim ke petugas.", type: "success" });
+      await loadLoans();
+    } finally {
+      setRequestingReturnId(null);
+    }
   };
 
   useEffect(() => {
@@ -111,6 +138,19 @@ export default function MyLoansPage() {
         </div>
       )}
 
+      {returnActionMessage && (
+        <div
+          role={returnActionMessage.type === "error" ? "alert" : "status"}
+          className={`rounded-lg border px-4 py-3 text-sm ${
+            returnActionMessage.type === "error"
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-emerald-500/30 bg-emerald-500/5 text-emerald-700"
+          }`}
+        >
+          {returnActionMessage.text}
+        </div>
+      )}
+
       <Card className="shadow-sm border-border/50">
         <CardHeader className="pb-3 border-b bg-muted/20">
           <CardTitle className="text-lg flex items-center gap-2">
@@ -141,7 +181,7 @@ export default function MyLoansPage() {
               <TableBody>
                 {loans.length > 0 ? (
                   loans.map((loan) => {
-                    const statusInfo = getStatusBadgeInfo(loan.status);
+                    const statusInfo = getStatusBadgeInfo(getDisplayStatus(loan));
                     const ret = getReturnData(loan);
                     const fineTotal = ret ? Number(ret.jumlah_denda) || 0 : 0;
                     const fineStatus = ret?.status_pembayaran || (fineTotal > 0 ? "belum_lunas" : "lunas");
@@ -212,6 +252,24 @@ export default function MyLoansPage() {
 
                         {/* Aksi */}
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          {loan.status_pengembalian === "menunggu_verifikasi" ? (
+                            <span className="mr-2 text-xs font-medium text-amber-600">Menunggu verifikasi</span>
+                          ) : (loan.status === "disetujui" || loan.status === "terlambat") && loan.status_pengembalian == null ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mr-1 h-8 border-primary text-primary hover:bg-primary/10"
+                              disabled={requestingReturnId === loan.id}
+                              onClick={() => handleRequestReturn(loan.id)}
+                            >
+                              {requestingReturnId === loan.id ? (
+                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" />
+                              )}
+                              Ajukan Pengembalian
+                            </Button>
+                          ) : null}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -227,7 +285,7 @@ export default function MyLoansPage() {
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       <div className="flex flex-col items-center justify-center gap-2 py-6">
                         <History className="h-8 w-8 text-muted-foreground/30" />
                         <p>Belum ada riwayat peminjaman terdaftar.</p>
@@ -257,8 +315,8 @@ export default function MyLoansPage() {
                   <CardTitle className="text-lg font-bold flex items-center gap-2">
                     <Eye className="h-5 w-5 text-primary" /> Detail Peminjaman
                   </CardTitle>
-                  <Badge variant="outline" className={getStatusBadgeInfo(detailLoan.status).className}>
-                    {getStatusBadgeInfo(detailLoan.status).label}
+                  <Badge variant="outline" className={getStatusBadgeInfo(getDisplayStatus(detailLoan)).className}>
+                    {getStatusBadgeInfo(getDisplayStatus(detailLoan)).label}
                   </Badge>
                 </div>
                 <CardDescription className="text-xs mt-1">
@@ -379,6 +437,24 @@ export default function MyLoansPage() {
                     </div>
                   );
                 } else {
+                  if (detailLoan.status_pengembalian === "menunggu_verifikasi") {
+                    return (
+                      <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 uppercase tracking-wider">
+                          <Clock className="h-3.5 w-3.5" /> Menunggu Verifikasi Petugas
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Pengajuan pengembalian sudah dikirim. Petugas akan memeriksa kondisi alat sebelum pengembalian dinyatakan selesai.
+                        </p>
+                        {detailLoan.pengembalian_diajukan_pada && (
+                          <p className="text-[11px] text-muted-foreground">
+                            Diajukan pada {new Date(detailLoan.pengembalian_diajukan_pada).toLocaleString("id-ID")}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  }
+
                   const daysLate = getDaysLate(detailLoan.tanggal_jatuh_tempo);
                   const estLateFine = daysLate * 5000 * Number(detailLoan.jumlah || 1);
 
