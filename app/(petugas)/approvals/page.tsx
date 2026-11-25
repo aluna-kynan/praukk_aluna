@@ -50,25 +50,23 @@ export default function ApprovalsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Persetujuan Peminjaman</h1>
-          <p className="text-muted-foreground mt-1">Kelola dan setujui pengajuan peminjaman alat dari pengguna.</p>
         </div>
       </div>
 
-      <Card className="shadow-sm border-border/50">
-        <CardHeader className="pb-3 border-b bg-muted/20">
-          <CardTitle className="text-lg flex items-center gap-2">
+      <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+        <CardHeader className="!py-3 !px-4 border-b bg-muted/20">
+          <CardTitle className="text-base flex items-center gap-2">
             Pengajuan Menunggu Persetujuan
             <Badge variant="secondary" className="bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 rounded-full">
               {loans.length}
             </Badge>
           </CardTitle>
-          <CardDescription>Segera proses pengajuan yang masuk agar stok alat dapat diperbarui secara akurat.</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="py-16 text-center flex flex-col items-center justify-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Memuat pengajuan dari Supabase...</p>
+              <p className="text-sm text-muted-foreground">Memuat data...</p>
             </div>
           ) : (
             <Table>

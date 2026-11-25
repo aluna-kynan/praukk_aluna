@@ -69,49 +69,38 @@ export default function ToolsCatalogPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-primary/5 p-6 rounded-2xl border border-primary/10">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-primary">Katalog Alat</h1>
-          <p className="text-muted-foreground mt-2 max-w-xl">
-            Cari dan pinjam alat yang Anda butuhkan. Pastikan membaca deskripsi dan melihat stok yang tersedia sebelum mengajukan peminjaman.
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Katalog Alat</h1>
         </div>
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="Cari nama alat..."
-            className="pl-9 h-10 bg-background/80 backdrop-blur-sm border-primary/20 focus-visible:ring-primary/50 rounded-full"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-        <Badge
-          variant={selectedCategory === null ? "default" : "outline"}
-          className="cursor-pointer px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all"
-          onClick={() => setSelectedCategory(null)}
-        >
-          Semua Kategori
-        </Badge>
-        {categories.map((category) => (
-          <Badge
-            key={category.id}
-            variant={selectedCategory === category.id ? "default" : "outline"}
-            className="cursor-pointer px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap bg-background hover:bg-muted transition-all"
-            onClick={() => setSelectedCategory(category.id)}
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+          <select
+            value={selectedCategory || "all"}
+            onChange={(e) => setSelectedCategory(e.target.value === "all" ? null : e.target.value)}
+            className="h-10 px-3 rounded-lg border border-input bg-background text-xs font-medium cursor-pointer"
           >
-            {category.nama}
-          </Badge>
-        ))}
+            <option value="all">Semua Kategori</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.nama}</option>
+            ))}
+          </select>
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="Cari alat..."
+              className="pl-9 h-10 bg-background text-xs"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
       </div>
 
       {loading ? (
         <div className="py-20 text-center flex flex-col items-center justify-center gap-2">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Memuat katalog alat dari Supabase...</p>
+          <p className="text-sm text-muted-foreground">Memuat data...</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -121,9 +110,17 @@ export default function ToolsCatalogPage() {
               return (
                 <Card key={tool.id} className="overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-shadow group border-border/60">
                   <div className="relative h-44 w-full bg-muted overflow-hidden flex items-center justify-center">
-                    <div className="text-muted-foreground font-semibold text-xl">
-                      {tool.nama.substring(0, 2).toUpperCase()}
-                    </div>
+                    {tool.gambar_url ? (
+                      <img
+                        src={tool.gambar_url}
+                        alt={tool.nama}
+                        className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                    ) : (
+                      <div className="text-muted-foreground font-semibold text-xl">
+                        {tool.nama.substring(0, 2).toUpperCase()}
+                      </div>
+                    )}
                     <div className="absolute top-2 right-2 flex gap-1">
                       {tool.stok_tersedia > 0 ? (
                         <Badge className="bg-green-500/90 text-white shadow-sm border-0">

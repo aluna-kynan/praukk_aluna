@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { createLogAction } from "@/actions/logs";
 
 export async function getCategories() {
   const supabase = await createClient();
@@ -25,16 +26,22 @@ export async function createCategory(formData: FormData) {
     return { error: "Nama kategori wajib diisi." };
   }
 
+  const trimmed = nama.trim();
   const supabase = await createClient();
-  const { error } = await supabase.from("kategori").insert({
-    nama: nama.trim(),
-  });
+  const { data: created, error } = await supabase
+    .from("kategori")
+    .insert({ nama: trimmed })
+    .select("id")
+    .single();
 
   if (error) {
     return { error: error.message };
   }
 
+  await createLogAction(`Menambah kategori: ${trimmed}`, "kategori", created?.id);
+
   revalidatePath("/categories");
+  revalidatePath("/logs");
   return { success: true };
 }
 
@@ -45,28 +52,45 @@ export async function updateCategory(id: string, formData: FormData) {
     return { error: "Nama kategori wajib diisi." };
   }
 
+  const trimmed = nama.trim();
   const supabase = await createClient();
   const { error } = await supabase
     .from("kategori")
-    .update({ nama: nama.trim() })
+    .update({ nama: trimmed })
     .eq("id", id);
 
   if (error) {
     return { error: error.message };
   }
 
+  await createLogAction(`Memperbarui kategori: ${trimmed}`, "kategori", id);
+
   revalidatePath("/categories");
+  revalidatePath("/logs");
   return { success: true };
 }
 
 export async function deleteCategory(id: string) {
   const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("kategori")
+    .select("nama")
+    .eq("id", id)
+    .single();
+
   const { error } = await supabase.from("kategori").delete().eq("id", id);
 
   if (error) {
     return { error: error.message };
   }
 
+  await createLogAction(
+    `Menghapus kategori: ${existing?.nama || id}`,
+    "kategori",
+    id
+  );
+
   revalidatePath("/categories");
+  revalidatePath("/logs");
   return { success: true };
 }

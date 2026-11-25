@@ -13,7 +13,8 @@ export async function getLoansAction(filterStatus?: string) {
       alat:alat_id (id, nama, stok_tersedia, stok_total, kondisi),
       peminjam:peminjam_id (id, nama_lengkap, peran),
       pengembalian:pengembalian (*)
-    `);
+    `)
+    .order("diajukan_pada", { ascending: false });
 
   if (filterStatus) {
     query = query.eq("status", filterStatus as any);

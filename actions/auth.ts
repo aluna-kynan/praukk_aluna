@@ -41,37 +41,38 @@ export async function loginAction(formData: FormData) {
     return { success: true, role };
   }
 
-  // Fallback for testing when email confirmation is enabled on Supabase or auth fails
-  const { data: allUsers } = await supabase.from("pengguna").select("*");
-  if (allUsers && allUsers.length > 0) {
-    const cleanSearch = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-    
-    // Search profile by matching name or partial string
-    const matchedProfile = allUsers.find((u) => {
-      const cleanName = u.nama_lengkap.toLowerCase().replace(/[^a-z0-9]/g, "");
-      return cleanName.includes(cleanSearch) || cleanSearch.includes(cleanName);
-    });
-
-    if (matchedProfile) {
-      cookieStore.set("user_id", matchedProfile.id, { path: "/", httpOnly: true });
-      revalidatePath("/", "layout");
-      return { success: true, role: matchedProfile.peran };
+  if (authError) {
+    const msg = authError.message?.toLowerCase() || "";
+    if (
+      msg.includes("invalid login credentials") ||
+      msg.includes("invalid") ||
+      msg.includes("credentials") ||
+      msg.includes("user not found")
+    ) {
+      return { error: "Email atau password salah. Silakan periksa kembali." };
     }
+    if (msg.includes("email not confirmed")) {
+      return {
+        error:
+          "Email belum dikonfirmasi di Supabase. Silakan konfirmasi email terlebih dahulu.",
+      };
+    }
+    if (msg.includes("too many requests") || msg.includes("rate limit")) {
+      return {
+        error: "Terlalu banyak percobaan login. Silakan tunggu beberapa saat.",
+      };
+    }
+    return { error: "Email atau password salah. Silakan periksa kembali." };
   }
 
-  if (authError?.message?.toLowerCase().includes("email not confirmed")) {
-    return {
-      error: "Email belum dikonfirmasi di Supabase. Solusi: Buka Supabase Dashboard -> Authentication -> Users -> klik titik tiga pada user -> 'Confirm Email', atau matikan 'Confirm Email' di Auth Settings.",
-    };
-  }
-
-  return { error: authError?.message || "Email atau password salah." };
+  return { error: "Email atau password salah. Silakan periksa kembali." };
 }
 
 export async function logoutAction() {
   const supabase = await createClient();
   const cookieStore = await cookies();
   await supabase.auth.signOut();
+  cookieStore.set("user_id", "", { path: "/", maxAge: 0, expires: new Date(0) });
   cookieStore.delete("user_id");
   revalidatePath("/", "layout");
   return { success: true };

@@ -16,6 +16,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "SiDigi | Solusi Digital",
   description: "Peminjaman Alat Digital Sekolah",
+  icons: {
+    icon: "/assets/collapse.png",
+    shortcut: "/assets/collapse.png",
+    apple: "/assets/collapse.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

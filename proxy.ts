@@ -43,9 +43,22 @@ export async function proxy(request: NextRequest) {
   const isAdminRoute = pathname.startsWith("/admin") || pathname.startsWith("/categories") || pathname.startsWith("/users") || pathname.startsWith("/logs");
   const isPetugasRoute = pathname.startsWith("/approvals") || pathname.startsWith("/monitoring") || pathname.startsWith("/reports");
   const isPeminjamRoute = pathname.startsWith("/tools") || pathname.startsWith("/my-loans");
+  const isProtectedRoute = isAdminRoute || isPetugasRoute || isPeminjamRoute;
 
-  if (!activeUser && (isAdminRoute || isPetugasRoute || isPeminjamRoute)) {
-    return NextResponse.redirect(new URL("/login", request.url));
+  // Jika belum login dan mengakses halaman yang dilindungi, redirect ke /login tanpa cache
+  if (!activeUser && isProtectedRoute) {
+    const redirectResponse = NextResponse.redirect(new URL("/login", request.url));
+    redirectResponse.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    redirectResponse.headers.set("Pragma", "no-cache");
+    redirectResponse.headers.set("Expires", "0");
+    return redirectResponse;
+  }
+
+  // Cegah browser menyimpan cache halaman yang dilindungi (mencegah akses kembali lewat tombol Back)
+  if (isProtectedRoute) {
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    response.headers.set("Pragma", "no-cache");
+    response.headers.set("Expires", "0");
   }
 
   return response;

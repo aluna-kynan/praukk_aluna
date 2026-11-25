@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { 
   ArrowLeftRight, 
   CheckCircle2, 
@@ -19,7 +19,9 @@ import {
   Package,
   Calendar,
   FileText,
-  Info
+  Info,
+  Upload,
+  Trash2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { 
@@ -35,7 +37,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { getLoansAction } from "@/actions/loans";
-import { processReturnAction, settleFineAction } from "@/actions/returns";
+import { processReturnAction, settleFineAction, uploadReturnPhotoAction } from "@/actions/returns";
 import { 
   getStatusBadgeInfo, 
   getKondisiBadgeInfo, 
@@ -49,7 +51,7 @@ export default function MonitoringPage() {
   const [loans, setLoans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeFilter, setTimeFilter] = useState<TimeFilterOption>("this_month");
-  const [statusTab, setStatusTab] = useState<"all" | "dipinjam" | "dikembalikan" | "piutang">("all");
+  const [statusTab, setStatusTab] = useState<"all" | "dipinjam" | "pengajuan_pengembalian" | "dikembalikan" | "piutang">("all");
 
   // Return modal state
   const [selectedLoan, setSelectedLoan] = useState<any | null>(null);
@@ -64,6 +66,13 @@ export default function MonitoringPage() {
 
   // Detail preview modal state (saat baris diklik)
   const [detailLoan, setDetailLoan] = useState<any | null>(null);
+
+  // Return photo upload & lightbox state
+  const [returnPhotoFile, setReturnPhotoFile] = useState<File | null>(null);
+  const [returnPhotoPreview, setReturnPhotoPreview] = useState<string | null>(null);
+  const [isConvertingPhoto, setIsConvertingPhoto] = useState(false);
+  const [lightboxPhotoUrl, setLightboxPhotoUrl] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Settlement loading state
   const [settlingId, setSettlingId] = useState<string | null>(null);
@@ -150,7 +159,16 @@ export default function MonitoringPage() {
   // Filter based on tab
   const displayedLoans = useMemo(() => {
     if (statusTab === "dipinjam") {
-      return dateFilteredLoans.filter((l) => l.status === "disetujui");
+      // Aktif dipinjam, belum ada pengajuan pengembalian
+      return dateFilteredLoans.filter(
+        (l) => (l.status === "disetujui" || l.status === "terlambat") && !(l as any).pengajuan_pengembalian_pada
+      );
+    }
+    if (statusTab === "pengajuan_pengembalian") {
+      // Peminjam sudah mengajukan pengembalian, menunggu petugas proses
+      return dateFilteredLoans.filter(
+        (l) => !!(l as any).pengajuan_pengembalian_pada && l.status !== "dikembalikan"
+      );
     }
     if (statusTab === "dikembalikan") {
       return dateFilteredLoans.filter((l) => l.status === "dikembalikan");
@@ -165,7 +183,12 @@ export default function MonitoringPage() {
 
   // Aggregate stats
   const stats = useMemo(() => {
-    const dipinjam = dateFilteredLoans.filter((l) => l.status === "disetujui").length;
+    const dipinjam = dateFilteredLoans.filter(
+      (l) => (l.status === "disetujui" || l.status === "terlambat") && !(l as any).pengajuan_pengembalian_pada
+    ).length;
+    const pengajuanPengembalian = dateFilteredLoans.filter(
+      (l) => !!(l as any).pengajuan_pengembalian_pada && l.status !== "dikembalikan"
+    ).length;
     const dikembalikan = dateFilteredLoans.filter((l) => l.status === "dikembalikan").length;
     
     let totalDendaLunas = 0;
@@ -183,7 +206,7 @@ export default function MonitoringPage() {
       }
     });
 
-    return { dipinjam, dikembalikan, totalDendaLunas, totalDendaTertunggak };
+    return { dipinjam, dikembalikan, totalDendaLunas, totalDendaTertunggak, pengajuanPengembalian };
   }, [dateFilteredLoans, getReturnData]);
 
   // Real-time calculation for modal
@@ -219,6 +242,81 @@ export default function MonitoringPage() {
     setStatusPembayaran("lunas");
     setReturnMsg(null);
     setShowPreview(false);
+    if (returnPhotoPreview && returnPhotoPreview.startsWith("blob:")) {
+      URL.revokeObjectURL(returnPhotoPreview);
+    }
+    setReturnPhotoFile(null);
+    setReturnPhotoPreview(null);
+    if (photoInputRef.current) photoInputRef.current.value = "";
+  };
+
+  const convertPhotoToWebp = (file: File, maxDim = 1200, quality = 0.85): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            const ratio = Math.min(maxDim / width, maxDim / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error("Canvas tidak didukung."));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(
+            (blob) => {
+              URL.revokeObjectURL(objectUrl);
+              if (!blob) {
+                reject(new Error("Gagal mengonversi foto."));
+                return;
+              }
+              resolve(new File([blob], "return-photo.webp", { type: "image/webp" }));
+            },
+            "image/webp",
+            quality
+          );
+        } catch (err) {
+          URL.revokeObjectURL(objectUrl);
+          reject(err);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("File bukan gambar yang valid."));
+      };
+      img.src = objectUrl;
+    });
+  };
+
+  const handleReturnPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setReturnMsg({ text: "Pilih file gambar yang valid.", type: "error" });
+      return;
+    }
+    setIsConvertingPhoto(true);
+    try {
+      const webp = await convertPhotoToWebp(file);
+      if (returnPhotoPreview && returnPhotoPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(returnPhotoPreview);
+      }
+      setReturnPhotoFile(webp);
+      setReturnPhotoPreview(URL.createObjectURL(webp));
+    } catch (err: any) {
+      setReturnMsg({ text: err?.message || "Gagal memproses foto.", type: "error" });
+    } finally {
+      setIsConvertingPhoto(false);
+    }
   };
 
   // Klik "Selesaikan" → buka preview dulu
@@ -234,11 +332,27 @@ export default function MonitoringPage() {
     setIsProcessing(true);
     setReturnMsg(null);
 
+    let uploadedFotoUrl: string | undefined = undefined;
+    if (returnPhotoFile) {
+      const fd = new FormData();
+      fd.append("file", returnPhotoFile);
+      fd.append("peminjaman_id", selectedLoan.id);
+      const upRes = await uploadReturnPhotoAction(fd);
+      if (upRes.error) {
+        setShowPreview(false);
+        setReturnMsg({ text: upRes.error, type: "error" });
+        setIsProcessing(false);
+        return;
+      }
+      uploadedFotoUrl = upRes.url;
+    }
+
     const res = await processReturnAction(selectedLoan.id, {
       kondisi_setelah: kondisiAfter,
       denda_kerusakan: dendaKerusakan,
       status_pembayaran: liveCalculation.totalDenda === 0 ? "lunas" : statusPembayaran,
       catatan,
+      foto_url: uploadedFotoUrl,
     });
 
     if (res.error) {
@@ -272,25 +386,18 @@ export default function MonitoringPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Pemantauan Pengembalian & Denda</h1>
-          <p className="text-muted-foreground mt-1">
-            Pantau status alat, verifikasi fisik, hitung denda multi-komponen, dan kelola pelunasan denda.
-          </p>
         </div>
 
         {/* Time Filter Select */}
-        <div className="flex items-center gap-2 bg-card border border-border/60 p-2 rounded-xl shadow-sm">
-          <Filter className="h-4 w-4 text-primary ml-1" />
-          <span className="text-xs font-medium text-muted-foreground">Filter Waktu:</span>
-          <select 
-            value={timeFilter} 
-            onChange={(e) => setTimeFilter(e.target.value as TimeFilterOption)}
-            className="h-9 px-3 rounded-lg bg-background text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary/40 border border-border/60 cursor-pointer"
-          >
-            {TIME_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
+        <select 
+          value={timeFilter} 
+          onChange={(e) => setTimeFilter(e.target.value as TimeFilterOption)}
+          className="h-9 px-3 rounded-lg bg-card text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 border border-border/60 shadow-xs cursor-pointer"
+        >
+          {TIME_FILTER_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Metric Cards */}
@@ -303,6 +410,19 @@ export default function MonitoringPage() {
           <CardContent>
             <div className="text-2xl font-bold text-blue-600">{stats.dipinjam} Transaksi</div>
             <p className="text-xs text-muted-foreground mt-1">Alat berstatus aktif di peminjam</p>
+          </CardContent>
+        </Card>
+
+        <Card className={`border-border/60 shadow-sm ${stats.pengajuanPengembalian > 0 ? "border-amber-400 dark:border-amber-600" : ""}`}>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Menunggu Konfirmasi</CardTitle>
+            <ArrowLeftRight className="h-4 w-4 text-amber-500" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${stats.pengajuanPengembalian > 0 ? "text-amber-600" : "text-muted-foreground"}`}>
+              {stats.pengajuanPengembalian} Transaksi
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Peminjam sudah mengajukan kembali</p>
           </CardContent>
         </Card>
 
@@ -319,17 +439,6 @@ export default function MonitoringPage() {
 
         <Card className="border-border/60 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Denda Terkumpul</CardTitle>
-            <DollarSign className="h-4 w-4 text-emerald-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-emerald-600">{formatRupiah(stats.totalDendaLunas)}</div>
-            <p className="text-xs text-muted-foreground mt-1">Denda berstatus lunas / tertagih</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/60 shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Denda Tertunggak</CardTitle>
             <AlertTriangle className="h-4 w-4 text-rose-500" />
           </CardHeader>
@@ -341,51 +450,27 @@ export default function MonitoringPage() {
       </div>
 
       {/* Main Table Card */}
-      <Card className="shadow-sm border-border/50">
-        <CardHeader className="pb-3 border-b bg-muted/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <div>
-            <CardTitle className="text-lg flex items-center gap-2">
-              Daftar Transaksi Peminjaman & Pengembalian
-            </CardTitle>
-            <CardDescription>
-              Klik baris mana saja untuk melihat pratinjau detail lengkap transaksi, status fisik, & denda.
-            </CardDescription>
-          </div>
+      <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+        <CardHeader className="!py-3 !px-4 border-b bg-muted/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            Daftar Transaksi Peminjaman & Pengembalian
+          </CardTitle>
 
-          {/* Quick Filter Tabs */}
-          <div className="flex items-center gap-1 bg-background p-1 rounded-lg border border-border/60">
-            <Button
-              size="sm"
-              variant={statusTab === "all" ? "default" : "ghost"}
-              className="h-7 text-xs px-2.5"
-              onClick={() => setStatusTab("all")}
+          {/* Quick Filter Select */}
+          <div className="flex items-center gap-2">
+            <select
+              value={statusTab}
+              onChange={(e) => setStatusTab(e.target.value as any)}
+              className="h-9 px-3 rounded-lg border border-input bg-background text-xs font-medium cursor-pointer"
             >
-              Semua ({dateFilteredLoans.length})
-            </Button>
-            <Button
-              size="sm"
-              variant={statusTab === "dipinjam" ? "default" : "ghost"}
-              className="h-7 text-xs px-2.5"
-              onClick={() => setStatusTab("dipinjam")}
-            >
-              Dipinjam ({stats.dipinjam})
-            </Button>
-            <Button
-              size="sm"
-              variant={statusTab === "dikembalikan" ? "default" : "ghost"}
-              className="h-7 text-xs px-2.5"
-              onClick={() => setStatusTab("dikembalikan")}
-            >
-              Dikembalikan ({stats.dikembalikan})
-            </Button>
-            <Button
-              size="sm"
-              variant={statusTab === "piutang" ? "destructive" : "ghost"}
-              className={`h-7 text-xs px-2.5 ${statusTab !== "piutang" ? "text-rose-600 hover:text-rose-700 hover:bg-rose-50" : ""}`}
-              onClick={() => setStatusTab("piutang")}
-            >
-              Belum Lunas
-            </Button>
+              <option value="all">Semua Status</option>
+              <option value="dipinjam">Sedang Dipinjam</option>
+              <option value="pengajuan_pengembalian">
+                Menunggu Konfirmasi{stats.pengajuanPengembalian > 0 ? ` (${stats.pengajuanPengembalian})` : ""}
+              </option>
+              <option value="dikembalikan">Selesai Dikembalikan</option>
+              <option value="piutang">Denda Belum Lunas</option>
+            </select>
           </div>
         </CardHeader>
 
@@ -393,7 +478,7 @@ export default function MonitoringPage() {
           {loading ? (
             <div className="py-16 text-center flex flex-col items-center justify-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Memuat data monitoring dari Supabase...</p>
+              <p className="text-sm text-muted-foreground">Memuat data...</p>
             </div>
           ) : (
             <Table>
@@ -416,18 +501,18 @@ export default function MonitoringPage() {
                     const fineTotal = ret ? Number(ret.jumlah_denda) || 0 : 0;
                     const fineStatus = ret?.status_pembayaran || (fineTotal > 0 ? "belum_lunas" : "lunas");
                     const fineStatusInfo = getStatusPembayaranBadgeInfo(fineStatus);
+                    const hasPengajuan = !!(loan as any).pengajuan_pengembalian_pada && loan.status !== "dikembalikan";
 
                     return (
                       <TableRow 
                         key={loan.id} 
-                        className="hover:bg-muted/40 cursor-pointer transition-colors group"
+                        className={`hover:bg-muted/40 cursor-pointer transition-colors group ${hasPengajuan ? "bg-amber-50/40 dark:bg-amber-950/10" : ""}`}
                         onClick={() => setDetailLoan(loan)}
                       >
                         <TableCell className="font-medium">
                           <div className="font-semibold text-foreground group-hover:text-primary transition-colors">
                             {loan.peminjam?.nama_lengkap || "Peminjam"}
                           </div>
-                          <span className="text-[11px] text-muted-foreground font-mono">{loan.id}</span>
                         </TableCell>
                         <TableCell>
                           <div className="font-medium text-foreground">{loan.alat?.nama || "Alat"}</div>
@@ -437,33 +522,53 @@ export default function MonitoringPage() {
                           {loan.tanggal_jatuh_tempo ? new Date(loan.tanggal_jatuh_tempo).toLocaleDateString("id-ID") : "-"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={statusInfo.className}>
-                            {statusInfo.label}
-                          </Badge>
+                          {hasPengajuan ? (
+                            <Badge variant="outline" className="border-amber-400 text-amber-600 bg-amber-50 dark:bg-amber-950/30">
+                              <Clock className="h-3 w-3 mr-1" /> Pengajuan Kembali
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className={statusInfo.className}>
+                              {statusInfo.label}
+                            </Badge>
+                          )}
                         </TableCell>
 
                         {/* Kondisi & Rincian Denda */}
                         <TableCell>
                           {ret ? (
-                            <div className="space-y-1">
-                              <Badge variant="outline" className={getKondisiBadgeInfo(ret.kondisi_setelah).className}>
-                                {getKondisiBadgeInfo(ret.kondisi_setelah).label}
-                              </Badge>
-                              {fineTotal > 0 ? (
-                                <div className="text-xs space-y-0.5">
-                                  <div className="font-semibold text-rose-600">{formatRupiah(fineTotal)}</div>
-                                  {(() => {
-                                    const { dendaTelat, dendaRusak } = getDendaBreakdown(ret);
-                                    return (
-                                      <div className="text-[10px] text-muted-foreground">
-                                        Telat: {formatRupiah(dendaTelat)} | Rusak: {formatRupiah(dendaRusak)}
-                                      </div>
-                                    );
-                                  })()}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-emerald-600 font-medium">Bebas Denda (Rp 0)</div>
+                            <div className="flex items-start gap-2.5">
+                              {ret.foto_url && (
+                                <img
+                                  src={ret.foto_url}
+                                  alt="Foto pengembalian"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLightboxPhotoUrl(ret.foto_url);
+                                  }}
+                                  title="Klik untuk memperbesar foto"
+                                  className="h-9 w-9 rounded-md object-cover border border-border/70 shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                                />
                               )}
+                              <div className="space-y-1">
+                                <Badge variant="outline" className={getKondisiBadgeInfo(ret.kondisi_setelah).className}>
+                                  {getKondisiBadgeInfo(ret.kondisi_setelah).label}
+                                </Badge>
+                                {fineTotal > 0 ? (
+                                  <div className="text-xs space-y-0.5">
+                                    <div className="font-semibold text-rose-600">{formatRupiah(fineTotal)}</div>
+                                    {(() => {
+                                      const { dendaTelat, dendaRusak } = getDendaBreakdown(ret);
+                                      return (
+                                        <div className="text-[10px] text-muted-foreground">
+                                          Telat: {formatRupiah(dendaTelat)} | Rusak: {formatRupiah(dendaRusak)}
+                                        </div>
+                                      );
+                                    })()}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-emerald-600 font-medium">Bebas Denda (Rp 0)</div>
+                                )}
+                              </div>
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground italic">-</span>
@@ -501,11 +606,13 @@ export default function MonitoringPage() {
                               <Eye className="h-3.5 w-3.5 mr-1" /> Detail
                             </Button>
 
-                            {loan.status === "disetujui" ? (
+                            {(loan.status === "disetujui" || loan.status === "terlambat") ? (
                               <Button 
                                 size="sm" 
                                 variant="outline" 
-                                className="h-8 border-primary text-primary hover:bg-primary/10 shadow-sm"
+                                disabled={!hasPengajuan}
+                                title={!hasPengajuan ? "Peminjam belum mengajukan pengembalian" : undefined}
+                                className={`h-8 shadow-sm ${hasPengajuan ? "border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/30" : "border-primary text-primary hover:bg-primary/10"}`}
                                 onClick={() => handleOpenReturnModal(loan)}
                               >
                                 <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Proses Kembali
@@ -551,9 +658,9 @@ export default function MonitoringPage() {
       {/* Modal Verifikasi Pengembalian & Kalkulator Denda */}
       {selectedLoan && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg shadow-2xl border-primary/20 max-h-[90vh] overflow-y-auto">
-            <CardHeader className="border-b pb-4 bg-muted/20">
-              <CardTitle className="text-xl flex items-center gap-2">
+          <Card className="w-full max-w-lg shadow-2xl border-primary/20 max-h-[90vh] overflow-y-auto !gap-0 !py-0">
+            <CardHeader className="border-b !py-3 !px-4 bg-muted/20">
+              <CardTitle className="text-lg flex items-center gap-2">
                 <ArrowLeftRight className="h-5 w-5 text-primary" /> Verifikasi Pengembalian Alat
               </CardTitle>
               <CardDescription>
@@ -562,10 +669,20 @@ export default function MonitoringPage() {
               </CardDescription>
             </CardHeader>
             <form onSubmit={handleShowPreview}>
-              <CardContent className="space-y-4 pt-5">
+              <CardContent className="space-y-3 p-4">
                 {returnMsg && (
                   <div className={`p-3 rounded-md text-sm ${returnMsg.type === "success" ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20" : "bg-rose-500/10 text-rose-600 border border-rose-500/20"}`}>
                     {returnMsg.text}
+                  </div>
+                )}
+
+                {/* Catatan dari peminjam (jika ada) */}
+                {(selectedLoan as any).catatan_peminjam && (
+                  <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs space-y-1">
+                    <p className="font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                      <Info className="h-3.5 w-3.5" /> Catatan dari Peminjam:
+                    </p>
+                    <p className="text-amber-800 dark:text-amber-300 italic">&ldquo;{(selectedLoan as any).catatan_peminjam}&rdquo;</p>
                   </div>
                 )}
 
@@ -637,6 +754,72 @@ export default function MonitoringPage() {
                   </div>
                 )}
 
+                {/* Foto Alat Saat Dikembalikan */}
+                <div className="space-y-1.5">
+                  <Label className="font-semibold text-sm">Foto Alat Saat Dikembalikan (Opsional)</Label>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleReturnPhotoChange}
+                    className="hidden"
+                  />
+                  {returnPhotoPreview ? (
+                    <div className="relative rounded-xl border border-border overflow-hidden bg-muted/20">
+                      <img
+                        src={returnPhotoPreview}
+                        alt="Pratinjau foto pengembalian"
+                        className="w-full h-32 object-cover"
+                      />
+                      <div className="absolute top-2 right-2 flex items-center gap-1.5">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 px-2.5 text-xs shadow-sm"
+                          disabled={isConvertingPhoto}
+                          onClick={() => photoInputRef.current?.click()}
+                        >
+                          Ganti
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="destructive"
+                          className="h-7 w-7 shadow-sm"
+                          disabled={isConvertingPhoto}
+                          onClick={() => {
+                            if (returnPhotoPreview.startsWith("blob:")) {
+                              URL.revokeObjectURL(returnPhotoPreview);
+                            }
+                            setReturnPhotoFile(null);
+                            setReturnPhotoPreview(null);
+                            if (photoInputRef.current) photoInputRef.current.value = "";
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isConvertingPhoto}
+                      onClick={() => photoInputRef.current?.click()}
+                      className="w-full h-24 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-muted/30 transition-colors flex flex-col items-center justify-center gap-1 text-muted-foreground cursor-pointer"
+                    >
+                      {isConvertingPhoto ? (
+                        <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                      ) : (
+                        <>
+                          <Upload className="h-5 w-5 text-primary" />
+                          <span className="text-xs font-medium text-foreground">Upload Foto Alat</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
                 {/* 3. Live Card Perhitungan Denda Transparan */}
                 <div className="p-4 bg-muted/30 border border-border/70 rounded-xl space-y-2.5">
                   <div className="flex justify-between items-center text-xs text-muted-foreground">
@@ -701,14 +884,14 @@ export default function MonitoringPage() {
       {/* Dialog Preview Konfirmasi Sebelum Submit Pengembalian */}
       {showPreview && selectedLoan && (
         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-md shadow-2xl border-primary/30 max-h-[85vh] overflow-y-auto">
-            <CardHeader className="border-b bg-primary/5 pb-4">
+          <Card className="w-full max-w-md shadow-2xl border-primary/30 max-h-[85vh] overflow-y-auto !gap-0 !py-0">
+            <CardHeader className="border-b bg-primary/5 !py-3 !px-4">
               <CardTitle className="text-lg flex items-center gap-2">
                 <FileCheck className="h-5 w-5 text-primary" /> Konfirmasi Pengembalian
               </CardTitle>
               <CardDescription>Periksa kembali data berikut sebelum disimpan ke database.</CardDescription>
             </CardHeader>
-            <CardContent className="pt-5 space-y-3">
+            <CardContent className="p-4 space-y-3">
               {returnMsg && (
                 <div className={`p-3 rounded-md text-sm ${returnMsg.type === "success" ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20" : "bg-rose-500/10 text-rose-600 border border-rose-500/20"}`}>
                   {returnMsg.text}
@@ -795,10 +978,10 @@ export default function MonitoringPage() {
           onClick={() => setDetailLoan(null)}
         >
           <Card 
-            className="w-full max-w-xl shadow-2xl border-border/80 max-h-[90vh] flex flex-col overflow-hidden bg-card"
+            className="w-full max-w-xl shadow-2xl border-border/80 max-h-[90vh] flex flex-col overflow-hidden bg-card !gap-0 !py-0"
             onClick={(e) => e.stopPropagation()}
           >
-            <CardHeader className="border-b bg-muted/30 pb-3 flex flex-row items-center justify-between">
+            <CardHeader className="border-b bg-muted/30 !py-3 !px-4 flex flex-row items-center justify-between">
               <div>
                 <div className="flex items-center gap-2">
                   <CardTitle className="text-lg font-bold flex items-center gap-2">
@@ -808,9 +991,6 @@ export default function MonitoringPage() {
                     {getStatusBadgeInfo(detailLoan.status).label}
                   </Badge>
                 </div>
-                <CardDescription className="text-xs mt-1">
-                  ID Transaksi: <span className="font-mono font-medium text-foreground">{detailLoan.id}</span>
-                </CardDescription>
               </div>
               <Button 
                 variant="ghost" 
@@ -848,7 +1028,7 @@ export default function MonitoringPage() {
                     <span>Jumlah: <strong className="text-foreground">{detailLoan.jumlah} unit</strong></span>
                     {detailLoan.alat?.kondisi && (
                       <Badge variant="outline" className={getKondisiBadgeInfo(detailLoan.alat.kondisi).className}>
-                        Master: {getKondisiBadgeInfo(detailLoan.alat.kondisi).label}
+                        {getKondisiBadgeInfo(detailLoan.alat.kondisi).label}
                       </Badge>
                     )}
                   </div>
@@ -951,6 +1131,25 @@ export default function MonitoringPage() {
                       <p className="text-xs text-muted-foreground">
                         Alat saat ini berstatus <strong>Sedang Dipinjam</strong> dan belum diverifikasi pengembaliannya ke gudang.
                       </p>
+                      {/* Tampilkan info pengajuan pengembalian peminjam */}
+                      {(detailLoan as any).pengajuan_pengembalian_pada && (
+                        <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-700 text-xs space-y-1">
+                          <p className="font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                            <Info className="h-3.5 w-3.5" /> Peminjam sudah mengajukan pengembalian
+                          </p>
+                          <p className="text-amber-600 dark:text-amber-400">
+                            Diajukan:{" "}
+                            {new Date((detailLoan as any).pengajuan_pengembalian_pada).toLocaleString("id-ID", {
+                              day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+                            })}
+                          </p>
+                          {(detailLoan as any).catatan_peminjam && (
+                            <p className="italic text-amber-700 dark:text-amber-300">
+                              &ldquo;{(detailLoan as any).catatan_peminjam}&rdquo;
+                            </p>
+                          )}
+                        </div>
+                      )}
                       {daysLate > 0 ? (
                         <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 flex items-start gap-2">
                           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -973,14 +1172,14 @@ export default function MonitoringPage() {
               })()}
             </CardContent>
 
-            <CardFooter className="border-t bg-muted/20 flex justify-between gap-2 p-3">
-              <Button variant="outline" size="sm" onClick={() => setDetailLoan(null)}>
-                Tutup
-              </Button>
-              <div className="flex items-center gap-2">
-                {detailLoan.status === "disetujui" && (
+            {((detailLoan.status === "disetujui" || detailLoan.status === "terlambat") ||
+              getReturnData(detailLoan)?.status_pembayaran === "belum_lunas") && (
+              <CardFooter className="border-t bg-muted/20 flex justify-end gap-2 p-3">
+                {(detailLoan.status === "disetujui" || detailLoan.status === "terlambat") && (
                   <Button
                     size="sm"
+                    disabled={!(detailLoan as any).pengajuan_pengembalian_pada}
+                    title={!(detailLoan as any).pengajuan_pengembalian_pada ? "Peminjam belum mengajukan pengembalian" : undefined}
                     className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
                     onClick={() => {
                       const target = detailLoan;
@@ -988,7 +1187,7 @@ export default function MonitoringPage() {
                       handleOpenReturnModal(target);
                     }}
                   >
-                    <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Proses Pengembalian Sekarang
+                    <ArrowLeftRight className="mr-1.5 h-3.5 w-3.5" /> Proses Pengembalian
                   </Button>
                 )}
                 {(() => {
@@ -1011,9 +1210,34 @@ export default function MonitoringPage() {
                   }
                   return null;
                 })()}
-              </div>
-            </CardFooter>
+              </CardFooter>
+            )}
           </Card>
+        </div>
+      )}
+
+      {/* Lightbox Preview Foto Pengembalian */}
+      {lightboxPhotoUrl && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setLightboxPhotoUrl(null)}
+        >
+          <div className="relative max-w-3xl w-full flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              className="absolute -top-3 -right-3 h-8 w-8 rounded-full shadow-lg"
+              onClick={() => setLightboxPhotoUrl(null)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <img
+              src={lightboxPhotoUrl}
+              alt="Foto alat saat pengembalian"
+              className="max-h-[85vh] w-auto rounded-xl shadow-2xl border border-white/10 object-contain"
+            />
+          </div>
         </div>
       )}
     </div>

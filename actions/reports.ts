@@ -5,23 +5,31 @@ import { createClient } from "@/lib/supabase/server";
 export async function getReportDataAction(startDate?: string, endDate?: string) {
   const supabase = await createClient();
 
+  const startIso = startDate
+    ? startDate.includes("T") ? startDate : `${startDate}T00:00:00`
+    : undefined;
+  const endIso = endDate
+    ? endDate.includes("T") ? endDate : `${endDate}T23:59:59.999`
+    : undefined;
+
   let loansQuery = supabase
     .from("peminjaman")
     .select(`
       *,
       alat:alat_id (nama),
-      peminjam:peminjam_id (nama_lengkap)
+      peminjam:peminjam_id (nama_lengkap),
+      pengembalian:pengembalian (*)
     `)
     .order("diajukan_pada", { ascending: false });
 
-  if (startDate) {
-    loansQuery = loansQuery.gte("diajukan_pada", startDate);
+  if (startIso) {
+    loansQuery = loansQuery.gte("diajukan_pada", startIso);
   }
-  if (endDate) {
-    loansQuery = loansQuery.lte("diajukan_pada", endDate);
+  if (endIso) {
+    loansQuery = loansQuery.lte("diajukan_pada", endIso);
   }
 
-  const { data: loans, error: loansError } = await loansQuery;
+  const { data: loans } = await loansQuery;
 
   let returnsQuery = supabase
     .from("pengembalian")
@@ -29,20 +37,21 @@ export async function getReportDataAction(startDate?: string, endDate?: string) 
       *,
       peminjaman:peminjaman_id (
         id,
+        jumlah,
         alat:alat_id (nama),
         peminjam:peminjam_id (nama_lengkap)
       )
     `)
     .order("dikembalikan_pada", { ascending: false });
 
-  if (startDate) {
-    returnsQuery = returnsQuery.gte("dikembalikan_pada", startDate);
+  if (startIso) {
+    returnsQuery = returnsQuery.gte("dikembalikan_pada", startIso);
   }
-  if (endDate) {
-    returnsQuery = returnsQuery.lte("dikembalikan_pada", endDate);
+  if (endIso) {
+    returnsQuery = returnsQuery.lte("dikembalikan_pada", endIso);
   }
 
-  const { data: returns, error: returnsError } = await returnsQuery;
+  const { data: returns } = await returnsQuery;
 
   const returnsList = returns || [];
   const totalDenda = returnsList.reduce((acc, curr) => acc + (Number(curr.jumlah_denda) || 0), 0);

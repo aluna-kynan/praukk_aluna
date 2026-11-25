@@ -1,31 +1,61 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { History, ArrowRight, Loader2, AlertCircle, CheckCircle2, Eye, X, Package, Calendar, FileText, AlertTriangle } from "lucide-react";
+import {
+  History,
+  ArrowRight,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Eye,
+  X,
+  Package,
+  Calendar,
+  FileText,
+  AlertTriangle,
+  RotateCcw,
+  Clock,
+  MessageSquare,
+} from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import Link from "next/link";
 import { getLoansAction } from "@/actions/loans";
-import { 
-  getStatusBadgeInfo, 
-  getKondisiBadgeInfo, 
-  getStatusPembayaranBadgeInfo, 
-  formatRupiah 
+import { submitReturnByStudentAction } from "@/actions/returns";
+import {
+  getStatusBadgeInfo,
+  getKondisiBadgeInfo,
+  getStatusPembayaranBadgeInfo,
+  formatRupiah,
 } from "@/lib/status-mapper";
 
 export default function MyLoansPage() {
   const [loans, setLoans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState("all");
   const [detailLoan, setDetailLoan] = useState<any | null>(null);
+
+  // Return request dialog state
+  const [returnTarget, setReturnTarget] = useState<any | null>(null);
+  const [returnCatatan, setReturnCatatan] = useState("");
+  const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
+  const [returnMsg, setReturnMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   const getReturnData = useCallback((loan: any) => {
     if (!loan?.pengembalian) return null;
@@ -38,9 +68,7 @@ export default function MyLoansPage() {
     const now = new Date();
     due.setHours(0, 0, 0, 0);
     now.setHours(0, 0, 0, 0);
-    const diffTime = now.getTime() - due.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return Math.max(0, diffDays);
+    return Math.max(0, Math.ceil((now.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
   }, []);
 
   const getDendaBreakdown = useCallback((ret: any) => {
@@ -48,17 +76,10 @@ export default function MyLoansPage() {
     const totalDenda = Number(ret.jumlah_denda) || 0;
     let dendaTelat = Number(ret.denda_keterlambatan) || 0;
     let dendaRusak = Number(ret.denda_kerusakan) || 0;
-
     if (totalDenda > 0 && dendaTelat === 0 && dendaRusak === 0) {
-      if (ret.kondisi_setelah === "baik") {
-        dendaTelat = totalDenda;
-        dendaRusak = 0;
-      } else {
-        dendaRusak = totalDenda;
-        dendaTelat = 0;
-      }
+      if (ret.kondisi_setelah === "baik") { dendaTelat = totalDenda; }
+      else { dendaRusak = totalDenda; }
     }
-
     return { dendaTelat, dendaRusak, totalDenda };
   }, []);
 
@@ -69,60 +90,100 @@ export default function MyLoansPage() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    loadLoans();
-  }, []);
+  useEffect(() => { loadLoans(); }, []);
 
-  // Hitung total tunggakan denda peminjam jika ada
   const totalTunggakan = useMemo(() => {
     return loans.reduce((acc, loan) => {
-      const ret = loan.pengembalian;
-      if (ret && ret.status_pembayaran === "belum_lunas") {
-        return acc + (Number(ret.jumlah_denda) || 0);
-      }
+      const ret = getReturnData(loan);
+      if (ret?.status_pembayaran === "belum_lunas") return acc + (Number(ret.jumlah_denda) || 0);
       return acc;
     }, 0);
-  }, [loans]);
+  }, [loans, getReturnData]);
+
+  const filteredLoans = useMemo(() => {
+    return loans.filter((loan) => {
+      if (filterStatus === "all") return true;
+      if (filterStatus === "menunggu_konfirmasi") {
+        return !!(loan as any).pengajuan_pengembalian_pada && loan.status !== "dikembalikan";
+      }
+      return loan.status === filterStatus;
+    });
+  }, [loans, filterStatus]);
+
+  // Helper: apakah peminjam sudah mengajukan pengembalian tapi belum diproses petugas
+  const sudahDiajukan = (loan: any) =>
+    !!(loan as any).pengajuan_pengembalian_pada && loan.status !== "dikembalikan";
+
+  // Helper: apakah tombol pengajuan pengembalian boleh ditampilkan
+  const bisaAjukanKembali = (loan: any) =>
+    (loan.status === "disetujui" || loan.status === "terlambat") && !sudahDiajukan(loan);
+
+  const handleOpenReturnDialog = (loan: any) => {
+    setReturnTarget(loan);
+    setReturnCatatan("");
+    setReturnMsg(null);
+  };
+
+  const handleSubmitReturn = async () => {
+    if (!returnTarget) return;
+    setIsSubmittingReturn(true);
+    setReturnMsg(null);
+    const res = await submitReturnByStudentAction(returnTarget.id, returnCatatan);
+    if (res?.error) {
+      setReturnMsg({ text: res.error, type: "error" });
+    } else {
+      setReturnMsg({ text: "Pengajuan pengembalian berhasil dikirim. Tunggu petugas untuk memproses.", type: "success" });
+      await loadLoans();
+      setTimeout(() => {
+        setReturnTarget(null);
+        setReturnMsg(null);
+      }, 2000);
+    }
+    setIsSubmittingReturn(false);
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Riwayat Peminjaman Saya</h1>
-          <p className="text-muted-foreground mt-1">Pantau status pengajuan, jatuh tempo, pengembalian alat, dan status denda.</p>
-        </div>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">Riwayat Peminjaman</h1>
         <Link href="/tools" className={buttonVariants({ className: "bg-primary shadow-sm" })}>
-          Pinjam Alat Baru <ArrowRight className="ml-2 h-4 w-4" />
+          Pinjam Alat <ArrowRight className="ml-2 h-4 w-4" />
         </Link>
       </div>
 
-      {/* Banner Peringatan Tunggakan Denda jika ada */}
+      {/* Banner tunggakan denda */}
       {totalTunggakan > 0 && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-700 flex items-center justify-between gap-3 shadow-sm">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="h-5 w-5 shrink-0 text-rose-600" />
-            <div>
-              <p className="text-sm font-semibold">Anda memiliki denda tertunggak sebesar {formatRupiah(totalTunggakan)}</p>
-              <p className="text-xs text-rose-600/90">
-                Silakan lakukan pelunasan denda ke petugas inventaris di laboratorium atau ruang administrasi.
-              </p>
-            </div>
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-700 flex items-center gap-3 shadow-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 text-rose-600" />
+          <div>
+            <p className="text-sm font-semibold">Tunggakan denda: {formatRupiah(totalTunggakan)}</p>
+            <p className="text-xs text-rose-600/90">Silakan lunasi ke petugas di laboratorium atau ruang administrasi.</p>
           </div>
         </div>
       )}
 
-      <Card className="shadow-sm border-border/50">
-        <CardHeader className="pb-3 border-b bg-muted/20">
-          <CardTitle className="text-lg flex items-center gap-2">
-            Daftar Peminjaman Saya
-          </CardTitle>
-          <CardDescription>Klik baris mana saja untuk melihat pratinjau detail lengkap transaksi & denda.</CardDescription>
+      <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+        <CardHeader className="!py-3 !px-4 border-b bg-muted/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <CardTitle className="text-base">Daftar Peminjaman</CardTitle>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="h-9 px-3 rounded-lg border border-input bg-background text-xs font-medium cursor-pointer"
+          >
+            <option value="all">Semua Status</option>
+            <option value="diajukan">Diajukan</option>
+            <option value="disetujui">Disetujui</option>
+            <option value="menunggu_konfirmasi">Menunggu Konfirmasi Petugas</option>
+            <option value="ditolak">Ditolak</option>
+            <option value="dikembalikan">Dikembalikan</option>
+            <option value="terlambat">Terlambat</option>
+          </select>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="py-16 text-center flex flex-col items-center justify-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Memuat data peminjaman...</p>
+              <p className="text-sm text-muted-foreground">Memuat data...</p>
             </div>
           ) : (
             <Table>
@@ -133,23 +194,24 @@ export default function MyLoansPage() {
                   <TableHead>Status</TableHead>
                   <TableHead>Tgl Pengajuan</TableHead>
                   <TableHead>Jatuh Tempo</TableHead>
-                  <TableHead>Kondisi & Denda</TableHead>
+                  <TableHead>Kondisi &amp; Denda</TableHead>
                   <TableHead>Status Denda</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loans.length > 0 ? (
-                  loans.map((loan) => {
+                {filteredLoans.length > 0 ? (
+                  filteredLoans.map((loan) => {
                     const statusInfo = getStatusBadgeInfo(loan.status);
                     const ret = getReturnData(loan);
                     const fineTotal = ret ? Number(ret.jumlah_denda) || 0 : 0;
                     const fineStatus = ret?.status_pembayaran || (fineTotal > 0 ? "belum_lunas" : "lunas");
                     const fineStatusInfo = getStatusPembayaranBadgeInfo(fineStatus);
+                    const telahDiajukan = sudahDiajukan(loan);
 
                     return (
-                      <TableRow 
-                        key={loan.id} 
+                      <TableRow
+                        key={loan.id}
                         className="hover:bg-muted/40 cursor-pointer transition-colors group"
                         onClick={() => setDetailLoan(loan)}
                       >
@@ -157,7 +219,6 @@ export default function MyLoansPage() {
                           <div className="font-semibold text-foreground group-hover:text-primary transition-colors">
                             {loan.alat?.nama || "Alat"}
                           </div>
-                          <span className="text-[11px] text-muted-foreground font-mono">{loan.id}</span>
                         </TableCell>
                         <TableCell>{loan.jumlah} unit</TableCell>
                         <TableCell>
@@ -169,10 +230,10 @@ export default function MyLoansPage() {
                           {loan.diajukan_pada ? new Date(loan.diajukan_pada).toLocaleDateString("id-ID") : "-"}
                         </TableCell>
                         <TableCell className="text-muted-foreground font-medium text-xs">
-                          {loan.tanggal_jatuh_tempo ? new Date(loan.tanggal_jatuh_tempo).toLocaleDateString("id-ID") : "-"}
+                          {loan.tanggal_jatuh_tempo
+                            ? new Date(loan.tanggal_jatuh_tempo).toLocaleDateString("id-ID")
+                            : "-"}
                         </TableCell>
-
-                        {/* Kondisi Pengembalian & Nominal Denda */}
                         <TableCell>
                           {ret ? (
                             <div className="space-y-1">
@@ -180,57 +241,60 @@ export default function MyLoansPage() {
                                 {getKondisiBadgeInfo(ret.kondisi_setelah).label}
                               </Badge>
                               {fineTotal > 0 ? (
-                                <div className="text-xs font-semibold text-rose-600">
-                                  {formatRupiah(fineTotal)}
-                                </div>
+                                <div className="text-xs font-semibold text-rose-600">{formatRupiah(fineTotal)}</div>
                               ) : (
                                 <span className="text-xs text-emerald-600 font-medium">Bebas Denda</span>
                               )}
                             </div>
+                          ) : telahDiajukan ? (
+                            <Badge variant="outline" className="text-[11px] border-amber-400 text-amber-600 bg-amber-50 dark:bg-amber-950/30">
+                              <Clock className="h-3 w-3 mr-1" /> Menunggu Konfirmasi
+                            </Badge>
                           ) : (
-                            <span className="text-xs text-muted-foreground italic">Belum dikembalikan</span>
+                            <Badge variant="outline" className="text-[11px] bg-muted text-muted-foreground border-border">
+                              Belum Dikembalikan
+                            </Badge>
                           )}
                         </TableCell>
-
-                        {/* Status Pembayaran Denda */}
                         <TableCell>
                           {ret ? (
-                            <div className="space-y-0.5">
-                              <Badge variant="outline" className={fineStatusInfo.className}>
-                                {fineStatusInfo.label}
-                              </Badge>
-                              {ret.catatan && (
-                                <div className="text-[10px] text-muted-foreground max-w-[150px] truncate" title={ret.catatan}>
-                                  {ret.catatan}
-                                </div>
-                              )}
-                            </div>
+                            <Badge variant="outline" className={fineStatusInfo.className}>
+                              {fineStatusInfo.label}
+                            </Badge>
                           ) : (
                             <span className="text-xs text-muted-foreground">-</span>
                           )}
                         </TableCell>
-
-                        {/* Aksi */}
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 px-2 text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                            onClick={() => setDetailLoan(loan)}
-                            title="Lihat Pratinjau Detail"
-                          >
-                            <Eye className="h-3.5 w-3.5 mr-1" /> Detail
-                          </Button>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 px-2 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                              onClick={() => setDetailLoan(loan)}
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1" /> Detail
+                            </Button>
+                            {bisaAjukanKembali(loan) && (
+                              <Button
+                                size="sm"
+                                className="h-8 px-2 bg-primary/90 hover:bg-primary text-primary-foreground"
+                                onClick={() => handleOpenReturnDialog(loan)}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 mr-1" /> Ajukan Kembali
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       <div className="flex flex-col items-center justify-center gap-2 py-6">
                         <History className="h-8 w-8 text-muted-foreground/30" />
-                        <p>Belum ada riwayat peminjaman terdaftar.</p>
+                        <p>Belum ada riwayat peminjaman.</p>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -241,17 +305,112 @@ export default function MyLoansPage() {
         </CardContent>
       </Card>
 
-      {/* Dialog Preview Detail Peminjaman Saya */}
+      {/* Dialog Konfirmasi Pengajuan Pengembalian */}
+      {returnTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => !isSubmittingReturn && setReturnTarget(null)}
+        >
+          <Card
+            className="w-full max-w-md shadow-2xl border-border/80 bg-card !gap-0 !py-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CardHeader className="border-b bg-muted/30 !py-3 !px-4 flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <RotateCcw className="h-4 w-4 text-primary" /> Ajukan Pengembalian
+                </CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  {returnTarget.alat?.nama} · {returnTarget.jumlah} unit
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 rounded-full"
+                disabled={isSubmittingReturn}
+                onClick={() => setReturnTarget(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+
+            <CardContent className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                <p className="font-semibold">Pengajuan Pengembalian</p>
+                <p>Setelah mengajukan, petugas akan memverifikasi kondisi fisik alat sebelum pengembalian disetujui. Pastikan alat sudah siap untuk dikembalikan.</p>
+              </div>
+
+              {/* Catatan opsional */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" /> Catatan (opsional)
+                </label>
+                <textarea
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+                  rows={3}
+                  placeholder="Contoh: Ada sedikit goresan di sudut kanan..."
+                  value={returnCatatan}
+                  onChange={(e) => setReturnCatatan(e.target.value)}
+                  disabled={isSubmittingReturn}
+                />
+              </div>
+
+              {returnMsg && (
+                <div
+                  className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                    returnMsg.type === "success"
+                      ? "bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300"
+                      : "bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300"
+                  }`}
+                >
+                  {returnMsg.type === "success" ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  )}
+                  <p>{returnMsg.text}</p>
+                </div>
+              )}
+            </CardContent>
+
+            <CardFooter className="border-t bg-muted/20 flex justify-end gap-2 p-3">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isSubmittingReturn}
+                onClick={() => setReturnTarget(null)}
+              >
+                Batal
+              </Button>
+              <Button
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                disabled={isSubmittingReturn || !!returnMsg?.type}
+                onClick={handleSubmitReturn}
+              >
+                {isSubmittingReturn ? (
+                  <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Mengirim...</>
+                ) : (
+                  <><RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Kirim Pengajuan</>
+                )}
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+      )}
+
+      {/* Dialog Preview Detail Peminjaman */}
       {detailLoan && (
-        <div 
+        <div
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={() => setDetailLoan(null)}
         >
-          <Card 
-            className="w-full max-w-lg shadow-2xl border-border/80 max-h-[90vh] flex flex-col overflow-hidden bg-card"
+          <Card
+            className="w-full max-w-lg shadow-2xl border-border/80 max-h-[90vh] flex flex-col overflow-hidden bg-card !gap-0 !py-0"
             onClick={(e) => e.stopPropagation()}
           >
-            <CardHeader className="border-b bg-muted/30 pb-3 flex flex-row items-center justify-between">
+            <CardHeader className="border-b bg-muted/30 !py-3 !px-4 flex flex-row items-center justify-between">
               <div>
                 <div className="flex items-center gap-2">
                   <CardTitle className="text-lg font-bold flex items-center gap-2">
@@ -260,17 +419,14 @@ export default function MyLoansPage() {
                   <Badge variant="outline" className={getStatusBadgeInfo(detailLoan.status).className}>
                     {getStatusBadgeInfo(detailLoan.status).label}
                   </Badge>
+                  {sudahDiajukan(detailLoan) && (
+                    <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-600 bg-amber-50 dark:bg-amber-950/30">
+                      <Clock className="h-2.5 w-2.5 mr-1" /> Menunggu Petugas
+                    </Badge>
+                  )}
                 </div>
-                <CardDescription className="text-xs mt-1">
-                  ID Transaksi: <span className="font-mono font-medium text-foreground">{detailLoan.id}</span>
-                </CardDescription>
               </div>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-8 w-8 p-0 rounded-full hover:bg-muted" 
-                onClick={() => setDetailLoan(null)}
-              >
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 rounded-full hover:bg-muted" onClick={() => setDetailLoan(null)}>
                 <X className="h-4 w-4" />
               </Button>
             </CardHeader>
@@ -281,9 +437,7 @@ export default function MyLoansPage() {
                 <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <Package className="h-3.5 w-3.5 text-primary" /> Alat yang Dipinjam
                 </div>
-                <div className="text-base font-bold text-foreground">
-                  {detailLoan.alat?.nama || "Alat"}
-                </div>
+                <div className="text-base font-bold text-foreground">{detailLoan.alat?.nama || "Alat"}</div>
                 <div className="text-xs text-muted-foreground flex items-center justify-between">
                   <span>Jumlah: <strong className="text-foreground">{detailLoan.jumlah} unit</strong></span>
                   {detailLoan.alat?.kondisi && (
@@ -294,7 +448,7 @@ export default function MyLoansPage() {
                 </div>
               </div>
 
-              {/* Jadwal Waktu */}
+              {/* Jadwal */}
               <div className="p-3.5 rounded-xl border border-border/70 bg-muted/10 space-y-2.5">
                 <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <Calendar className="h-3.5 w-3.5 text-primary" /> Jadwal Peminjaman
@@ -303,8 +457,8 @@ export default function MyLoansPage() {
                   <div className="p-2.5 rounded-lg bg-background border border-border/50">
                     <span className="text-muted-foreground block text-[11px]">Tanggal Pengajuan</span>
                     <span className="font-semibold text-foreground">
-                      {detailLoan.diajukan_pada || detailLoan.created_at
-                        ? new Date(detailLoan.diajukan_pada || detailLoan.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
+                      {detailLoan.diajukan_pada
+                        ? new Date(detailLoan.diajukan_pada).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
                         : "-"}
                     </span>
                   </div>
@@ -327,6 +481,30 @@ export default function MyLoansPage() {
                 </div>
               </div>
 
+              {/* Status pengajuan pengembalian (jika sudah diajukan, belum diproses) */}
+              {sudahDiajukan(detailLoan) && !getReturnData(detailLoan) && (
+                <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+                    <Clock className="h-3.5 w-3.5" /> Pengajuan Pengembalian Dikirim
+                  </div>
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Diajukan pada{" "}
+                    <strong>
+                      {new Date((detailLoan as any).pengajuan_pengembalian_pada).toLocaleString("id-ID", {
+                        day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+                      })}
+                    </strong>
+                    . Petugas sedang menunggu pengembalian fisik alat.
+                  </p>
+                  {(detailLoan as any).catatan_peminjam && (
+                    <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300">
+                      <span className="font-semibold block mb-0.5">Catatan kamu:</span>
+                      <p className="italic">&ldquo;{(detailLoan as any).catatan_peminjam}&rdquo;</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Rincian Pengembalian & Denda */}
               {(() => {
                 const ret = getReturnData(detailLoan);
@@ -340,21 +518,20 @@ export default function MyLoansPage() {
                     <div className="p-3.5 rounded-xl border border-border/70 bg-card space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                          <FileText className="h-3.5 w-3.5 text-primary" /> Rincian Pengembalian & Denda
+                          <FileText className="h-3.5 w-3.5 text-primary" /> Rincian Pengembalian &amp; Denda
                         </div>
                         <Badge variant="outline" className={getKondisiBadgeInfo(ret.kondisi_setelah).className}>
                           Fisik: {getKondisiBadgeInfo(ret.kondisi_setelah).label}
                         </Badge>
                       </div>
-
                       <div className="divide-y divide-border/50 text-xs">
                         <div className="flex justify-between py-1.5">
                           <span className="text-muted-foreground">Denda Keterlambatan</span>
-                          <span className="font-semibold text-foreground">{formatRupiah(dendaTelat)}</span>
+                          <span className="font-semibold">{formatRupiah(dendaTelat)}</span>
                         </div>
                         <div className="flex justify-between py-1.5">
-                          <span className="text-muted-foreground">Denda Kerusakan Fisik</span>
-                          <span className="font-semibold text-foreground">{formatRupiah(dendaRusak)}</span>
+                          <span className="text-muted-foreground">Denda Kerusakan</span>
+                          <span className="font-semibold">{formatRupiah(dendaRusak)}</span>
                         </div>
                         <div className="flex justify-between py-2 items-center bg-muted/30 px-2 rounded-md my-1">
                           <span className="font-bold text-foreground">Total Denda</span>
@@ -364,12 +541,9 @@ export default function MyLoansPage() {
                         </div>
                         <div className="flex justify-between py-2 items-center">
                           <span className="text-muted-foreground">Status Pembayaran</span>
-                          <Badge variant="outline" className={fineInfo.className}>
-                            {fineInfo.label}
-                          </Badge>
+                          <Badge variant="outline" className={fineInfo.className}>{fineInfo.label}</Badge>
                         </div>
                       </div>
-
                       <div className="p-2.5 rounded-lg bg-muted/40 border border-border/60 text-xs">
                         <span className="text-muted-foreground block text-[11px] font-semibold">Catatan dari Petugas:</span>
                         <p className="mt-0.5 font-medium text-foreground italic">
@@ -378,25 +552,24 @@ export default function MyLoansPage() {
                       </div>
                     </div>
                   );
-                } else {
+                } else if (detailLoan.status === "disetujui" || detailLoan.status === "terlambat") {
                   const daysLate = getDaysLate(detailLoan.tanggal_jatuh_tempo);
                   const estLateFine = daysLate * 5000 * Number(detailLoan.jumlah || 1);
-
                   return (
                     <div className="p-3.5 rounded-xl border border-dashed border-border/80 bg-muted/10 space-y-2">
                       <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                         <CheckCircle2 className="h-3.5 w-3.5 text-blue-500" /> Status Peminjaman Aktif
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Alat ini sedang Anda gunakan. Harap jaga kondisi fisik alat dan kembalikan tepat waktu sebelum tanggal jatuh tempo.
+                        Alat ini sedang kamu gunakan. Jaga kondisi fisik dan kembalikan tepat waktu.
                       </p>
                       {daysLate > 0 ? (
                         <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 flex items-start gap-2">
                           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                           <div>
-                            <span className="font-semibold">Peminjaman terlambat {daysLate} hari!</span>
+                            <span className="font-semibold">Terlambat {daysLate} hari!</span>
                             <p className="text-[11px] text-rose-600/90 mt-0.5">
-                              Estimasi denda keterlambatan berjalan: <strong>{formatRupiah(estLateFine)}</strong> (Rp 5.000 x {detailLoan.jumlah} unit x {daysLate} hari). Segera kembalikan alat ke laboratorium.
+                              Estimasi denda berjalan: <strong>{formatRupiah(estLateFine)}</strong> (Rp 5.000 × {detailLoan.jumlah} unit × {daysLate} hari).
                             </p>
                           </div>
                         </div>
@@ -409,14 +582,21 @@ export default function MyLoansPage() {
                     </div>
                   );
                 }
+                return null;
               })()}
             </CardContent>
 
-            <CardFooter className="border-t bg-muted/20 flex justify-end gap-2 p-3">
-              <Button variant="outline" size="sm" onClick={() => setDetailLoan(null)}>
-                Tutup
-              </Button>
-            </CardFooter>
+            {bisaAjukanKembali(detailLoan) && (
+              <CardFooter className="border-t bg-muted/20 flex justify-end gap-2 p-3">
+                <Button
+                  size="sm"
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                  onClick={() => { setDetailLoan(null); handleOpenReturnDialog(detailLoan); }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Ajukan Pengembalian
+                </Button>
+              </CardFooter>
+            )}
           </Card>
         </div>
       )}

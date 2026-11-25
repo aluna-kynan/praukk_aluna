@@ -39,7 +39,12 @@ export default function LoginPage() {
       } else if (email === "andi@aluna.com" || email === "peminjam@aluna.com") {
         router.push("/tools");
       } else {
-        setError(result.error);
+        const errorMsg =
+          result.error.toLowerCase().includes("invalid") ||
+          result.error.toLowerCase().includes("credentials")
+            ? "Email atau password salah. Silakan periksa kembali."
+            : result.error;
+        setError(errorMsg);
       }
     } else if (result.role) {
       if (result.role === "admin") router.push("/users");
@@ -57,23 +62,21 @@ export default function LoginPage() {
       <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
 
       <Card className="w-full max-w-md z-10 shadow-2xl border-border/40 backdrop-blur-md bg-card/90">
-        <CardHeader className="space-y-0 text-center pb-1 pt-6 px-6">
-          <div className="mx-auto flex justify-center items-center">
+        <CardHeader className="text-center pb-2 pt-8 px-6">
+          <div className="mx-auto mb-3">
             <Image 
               src="/assets/logo.png" 
               alt="Logo" 
-              width={280} 
-              height={90} 
+              width={110} 
+              height={110} 
               priority
-              className="h-20 sm:h-24 w-auto object-contain"
+              className="object-contain mx-auto"
             />
           </div>
-          <div className="space-y-1 -mt-2">
-            {/* <CardTitle className="text-3xl font-bold tracking-tight text-foreground font-sans">Login</CardTitle> */}
-            <CardDescription className="text-xs text-muted-foreground font-sans">
-              Masukkan email dan password
-            </CardDescription>
-          </div>
+          <CardTitle className="text-2xl font-bold tracking-tight text-foreground">Selamat Datang</CardTitle>
+          <CardDescription className="text-sm text-muted-foreground mt-1">
+            Masukkan email dan password untuk masuk ke sistem
+          </CardDescription>
         </CardHeader>
 
         <form onSubmit={handleLogin}>

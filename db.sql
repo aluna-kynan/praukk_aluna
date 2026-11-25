@@ -89,6 +89,7 @@ create table alat (
   stok_total     int not null check (stok_total >= 0),
   stok_tersedia  int not null check (stok_tersedia >= 0),
   kondisi        kondisi_alat not null default 'baik',
+  gambar_url     text,
   created_at    timestamptz not null default now(),
   constraint chk_stok_tersedia_lte_total check (stok_tersedia <= stok_total)
 );
@@ -105,7 +106,9 @@ create table peminjaman (
   tanggal_pinjam      timestamptz,
   tanggal_jatuh_tempo date not null,
   diajukan_pada       timestamptz not null default now(),
-  disetujui_oleh      uuid references pengguna(id)
+  disetujui_oleh      uuid references pengguna(id) on delete set null,
+  pengajuan_pengembalian_pada timestamptz,
+  catatan_peminjam    text
 );
 
 create index idx_peminjaman_peminjam on peminjaman(peminjam_id);
@@ -123,13 +126,14 @@ create table pengembalian (
   jumlah_denda        numeric(12,2) not null default 0 check (jumlah_denda >= 0),
   status_pembayaran   status_pembayaran_denda not null default 'lunas',
   catatan             text,
-  diverifikasi_oleh   uuid references pengguna(id)
+  foto_url            text,
+  diverifikasi_oleh   uuid references pengguna(id) on delete set null
 );
 
 -- log aktivitas
 create table log_aktivitas (
   id           text primary key default generate_xid(),
-  pengguna_id  uuid references pengguna(id),
+  pengguna_id  uuid references pengguna(id) on delete set null,
   aksi         text not null,
   tabel_target text,
   id_target    text,
@@ -451,6 +455,9 @@ create policy "petugas_admin_lihat_semua_peminjaman" on peminjaman for select
   using (fn_peran_saya() in ('petugas', 'admin'));
 create policy "petugas_admin_update_peminjaman" on peminjaman for update
   using (fn_peran_saya() in ('petugas', 'admin'));
+create policy "peminjam_ajukan_pengembalian" on peminjaman for update
+  using (peminjam_id = auth.uid())
+  with check (peminjam_id = auth.uid());
 
 -- pengembalian
 create policy "petugas_admin_kelola_pengembalian" on pengembalian for all

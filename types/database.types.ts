@@ -24,6 +24,7 @@ export interface Alat {
   stok_total: number;
   stok_tersedia: number;
   kondisi: KondisiAlat;
+  gambar_url?: string | null;
   dibuat_pada: string;
   kategori?: Kategori;
 }
@@ -38,6 +39,8 @@ export interface Peminjaman {
   tanggal_jatuh_tempo: string;
   diajukan_pada: string;
   disetujui_oleh: string | null;
+  pengajuan_pengembalian_pada?: string | null;
+  catatan_peminjam?: string | null;
   alat?: Alat;
   peminjam?: Pengguna;
   disetujui_oleh_user?: Pengguna;
@@ -54,6 +57,7 @@ export interface Pengembalian {
   jumlah_denda: number;
   status_pembayaran: StatusPembayaranDenda;
   catatan?: string | null;
+  foto_url?: string | null;
   diverifikasi_oleh: string | null;
   peminjaman?: Peminjaman;
   diverifikasi_oleh_user?: Pengguna;
@@ -119,6 +123,7 @@ export type Database = {
           stok_total: number;
           stok_tersedia: number;
           kondisi?: KondisiAlat;
+          gambar_url?: string | null;
           dibuat_pada?: string;
         };
         Update: {
@@ -128,6 +133,7 @@ export type Database = {
           stok_total?: number;
           stok_tersedia?: number;
           kondisi?: KondisiAlat;
+          gambar_url?: string | null;
           dibuat_pada?: string;
         };
         Relationships: [];
@@ -144,6 +150,8 @@ export type Database = {
           tanggal_jatuh_tempo: string;
           diajukan_pada?: string;
           disetujui_oleh?: string | null;
+          pengajuan_pengembalian_pada?: string | null;
+          catatan_peminjam?: string | null;
         };
         Update: {
           id?: string;
@@ -155,6 +163,8 @@ export type Database = {
           tanggal_jatuh_tempo?: string;
           diajukan_pada?: string;
           disetujui_oleh?: string | null;
+          pengajuan_pengembalian_pada?: string | null;
+          catatan_peminjam?: string | null;
         };
         Relationships: [];
       };
@@ -170,6 +180,7 @@ export type Database = {
           jumlah_denda?: number;
           status_pembayaran?: StatusPembayaranDenda;
           catatan?: string | null;
+          foto_url?: string | null;
           diverifikasi_oleh?: string | null;
         };
         Update: {
@@ -182,6 +193,7 @@ export type Database = {
           jumlah_denda?: number;
           status_pembayaran?: StatusPembayaranDenda;
           catatan?: string | null;
+          foto_url?: string | null;
           diverifikasi_oleh?: string | null;
         };
         Relationships: [];

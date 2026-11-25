@@ -16,23 +16,25 @@ import {
   TableRow 
 } from "@/components/ui/table";
 import { getReportDataAction } from "@/actions/reports";
+import { downloadTransactionReportPdf } from "@/lib/pdf-report";
 import { 
   formatRupiah, 
   getKondisiBadgeInfo, 
+  getStatusBadgeInfo,
   getStatusPembayaranBadgeInfo 
 } from "@/lib/status-mapper";
 import { TIME_FILTER_OPTIONS, getDatePresetRange, TimeFilterOption } from "@/lib/date-utils";
 
 export default function ReportsPage() {
-  const [selectedPreset, setSelectedPreset] = useState<TimeFilterOption>("this_month");
+  const [selectedPreset, setSelectedPreset] = useState<TimeFilterOption>("all");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [reportData, setReportData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // Set default "Bulan Ini" on mount
+  // Set default "Semua Waktu" on mount
   useEffect(() => {
-    const range = getDatePresetRange("this_month");
+    const range = getDatePresetRange("all");
     setStartDate(range.startDate);
     setEndDate(range.endDate);
     fetchReport(range.startDate, range.endDate);
@@ -53,18 +55,20 @@ export default function ReportsPage() {
     fetchReport(range.startDate, range.endDate);
   };
 
-  const handlePrintPDF = () => {
-    window.print();
+  const handleDownloadPDF = () => {
+    if (!reportData) return;
+    downloadTransactionReportPdf({
+      reportData,
+      startDate,
+      endDate,
+    });
   };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:hidden">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Cetak Laporan Rekapitulasi</h1>
-          <p className="text-muted-foreground mt-1">
-            Ekspor dan cetak laporan riwayat peminjaman, rincian denda keterlambatan & kerusakan, serta piutang.
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Laporan Transaksi</h1>
         </div>
       </div>
 
@@ -77,33 +81,25 @@ export default function ReportsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:hidden">
-        <Card className="shadow-sm border-border/50">
-          <CardHeader className="bg-muted/20 border-b pb-4">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Printer className="h-5 w-5 text-primary" /> Filter Periode Laporan
+        <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+          <CardHeader className="bg-muted/20 border-b !py-3 !px-4">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Printer className="h-4 w-4 text-primary" /> Filter Periode
             </CardTitle>
-            <CardDescription>Filter berdasarkan rentang tanggal transaksi pengembalian.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4 pt-6">
+          <CardContent className="space-y-3 p-4">
             {/* Quick Presets */}
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                <Filter className="h-3 w-3" /> Preset Periode Cepat:
-              </Label>
-              <div className="flex flex-wrap gap-1.5">
+              <Label className="text-xs text-muted-foreground">Periode Waktu</Label>
+              <select
+                value={selectedPreset}
+                onChange={(e) => handleApplyPreset(e.target.value as TimeFilterOption)}
+                className="w-full h-9 px-3 rounded-lg border border-input bg-background text-xs font-medium cursor-pointer"
+              >
                 {TIME_FILTER_OPTIONS.map((opt) => (
-                  <Button
-                    key={opt.value}
-                    type="button"
-                    variant={selectedPreset === opt.value ? "default" : "outline"}
-                    size="sm"
-                    className="h-7 text-xs px-2.5 rounded-md"
-                    onClick={() => handleApplyPreset(opt.value)}
-                  >
-                    {opt.label}
-                  </Button>
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
-              </div>
+              </select>
             </div>
 
             <div className="grid grid-cols-2 gap-4 pt-2">
@@ -148,22 +144,25 @@ export default function ReportsPage() {
             </div>
 
             <div className="pt-3">
-              <Button className="w-full bg-primary" onClick={handlePrintPDF}>
-                <Printer className="mr-2 h-4 w-4" /> Cetak / Print PDF Laporan
+              <Button
+                className="w-full bg-primary"
+                onClick={handleDownloadPDF}
+                disabled={loading || !reportData}
+              >
+                <Download className="mr-2 h-4 w-4" /> Unduh PDF Laporan
               </Button>
             </div>
           </CardContent>
         </Card>
 
         {/* Ringkasan Data Finansial & Operasional */}
-        <Card className="shadow-sm border-border/50">
-          <CardHeader className="bg-muted/20 border-b pb-4">
-            <CardTitle className="text-lg flex items-center gap-2">
+        <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+          <CardHeader className="bg-muted/20 border-b !py-3 !px-4">
+            <CardTitle className="text-base flex items-center gap-2">
               <Download className="h-5 w-5 text-primary" /> Ringkasan Statistik Denda
             </CardTitle>
-            <CardDescription>Kalkulasi denda tertagih vs piutang real-time.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3 pt-6">
+          <CardContent className="space-y-3 p-4">
             {reportData ? (
               <>
                 <div className="grid grid-cols-2 gap-3">
@@ -192,30 +191,25 @@ export default function ReportsPage() {
                   </div>
                   <span className="font-bold text-lg text-rose-600">{formatRupiah(reportData.totalDendaTertunggak || 0)}</span>
                 </div>
-
-                <div className="text-xs text-muted-foreground pt-1 flex justify-between px-1">
-                  <span>Rincian: Telat {formatRupiah(reportData.totalDendaTelat || 0)}</span>
-                  <span>Kerusakan {formatRupiah(reportData.totalDendaKerusakan || 0)}</span>
-                </div>
               </>
             ) : (
               <div className="py-8 text-center text-muted-foreground">
                 <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-primary" />
-                Memuat data ringkasan...
+                Memuat data...
               </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Tabel Rincian Pengembalian & Denda Siap Cetak */}
-      <Card className="shadow-sm border-border/50 print:border-none print:shadow-none">
-        <CardHeader className="bg-muted/20 border-b pb-3 print:bg-transparent print:border-b-2">
+      {/* Tabel Rincian Transaksi Siap Cetak */}
+      <Card className="shadow-sm border-border/50 !gap-0 !py-0 print:border-none print:shadow-none">
+        <CardHeader className="bg-muted/20 border-b !py-3 !px-4 print:bg-transparent print:border-b-2">
           <CardTitle className="text-base font-semibold">
-            Tabel Rekapitulasi Pengembalian & Denda
+            Tabel Rekapitulasi Peminjaman, Pengembalian &amp; Denda
           </CardTitle>
           <CardDescription className="print:hidden">
-            Rincian transaksi pengembalian pada periode yang dipilih.
+            Rincian seluruh transaksi pada periode yang dipilih.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -225,64 +219,86 @@ export default function ReportsPage() {
                 <TableHead className="w-12">No</TableHead>
                 <TableHead>Peminjam</TableHead>
                 <TableHead>Alat</TableHead>
-                <TableHead>Tgl Kembali</TableHead>
-                <TableHead>Kondisi</TableHead>
+                <TableHead>Tgl Ajukan</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Tgl Kembali &amp; Kondisi</TableHead>
                 <TableHead className="text-right">Denda Telat</TableHead>
                 <TableHead className="text-right">Denda Rusak</TableHead>
                 <TableHead className="text-right">Total Denda</TableHead>
-                <TableHead className="text-center">Status</TableHead>
+                <TableHead className="text-center">Pembayaran</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {reportData && reportData.returns.length > 0 ? (
-                reportData.returns.map((ret: any, idx: number) => {
-                  const statusInfo = getStatusPembayaranBadgeInfo(ret.status_pembayaran || "lunas");
-                  const kondisiInfo = getKondisiBadgeInfo(ret.kondisi_setelah || "baik");
+              {reportData && reportData.loans && reportData.loans.length > 0 ? (
+                reportData.loans.map((loan: any, idx: number) => {
+                  const retRaw = loan.pengembalian;
+                  const ret = Array.isArray(retRaw) ? retRaw[0] : retRaw;
+                  const loanStatusInfo = getStatusBadgeInfo(loan.status);
+                  const kondisiInfo = ret ? getKondisiBadgeInfo(ret.kondisi_setelah || "baik") : null;
+                  const fineStatusInfo = ret
+                    ? getStatusPembayaranBadgeInfo(ret.status_pembayaran || "lunas")
+                    : null;
+
                   return (
-                    <TableRow key={ret.id} className="print:border-b">
+                    <TableRow key={loan.id} className="print:border-b">
                       <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
                       <TableCell className="font-medium text-xs">
-                        {ret.peminjaman?.peminjam?.nama_lengkap || "-"}
+                        {loan.peminjam?.nama_lengkap || "-"}
                       </TableCell>
                       <TableCell className="text-xs">
-                        {ret.peminjaman?.alat?.nama || "-"} ({ret.peminjaman?.jumlah || 1} unit)
+                        {loan.alat?.nama || "-"} ({loan.jumlah || 1} unit)
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {ret.dikembalikan_pada ? new Date(ret.dikembalikan_pada).toLocaleDateString("id-ID") : "-"}
+                        {loan.diajukan_pada ? new Date(loan.diajukan_pada).toLocaleDateString("id-ID") : "-"}
                       </TableCell>
                       <TableCell>
-                        <div className="space-y-0.5">
-                          <Badge variant="outline" className={`text-[10px] ${kondisiInfo.className}`}>
-                            {kondisiInfo.label}
-                          </Badge>
-                          {ret.catatan && (
-                            <div className="text-[10px] text-muted-foreground italic truncate max-w-[130px]" title={ret.catatan}>
-                              {ret.catatan}
+                        <Badge variant="outline" className={`text-[10px] ${loanStatusInfo.className}`}>
+                          {loanStatusInfo.label}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {ret ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] text-muted-foreground">
+                              {ret.dikembalikan_pada
+                                ? new Date(ret.dikembalikan_pada).toLocaleDateString("id-ID")
+                                : "-"}
                             </div>
-                          )}
-                        </div>
+                            {kondisiInfo && (
+                              <Badge variant="outline" className={`text-[10px] ${kondisiInfo.className}`}>
+                                {kondisiInfo.label}
+                              </Badge>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right text-xs">
-                        {formatRupiah(ret.denda_keterlambatan || 0)}
+                        {ret ? formatRupiah(ret.denda_keterlambatan || 0) : "-"}
                       </TableCell>
                       <TableCell className="text-right text-xs">
-                        {formatRupiah(ret.denda_kerusakan || 0)}
+                        {ret ? formatRupiah(ret.denda_kerusakan || 0) : "-"}
                       </TableCell>
                       <TableCell className="text-right text-xs font-semibold">
-                        {formatRupiah(ret.jumlah_denda || 0)}
+                        {ret ? formatRupiah(ret.jumlah_denda || 0) : "-"}
                       </TableCell>
                       <TableCell className="text-center">
-                        <Badge variant="outline" className={`text-[10px] ${statusInfo.className}`}>
-                          {statusInfo.label}
-                        </Badge>
+                        {fineStatusInfo ? (
+                          <Badge variant="outline" className={`text-[10px] ${fineStatusInfo.className}`}>
+                            {fineStatusInfo.label}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-28 text-center text-muted-foreground text-xs">
-                    Tidak ada data pengembalian pada periode ini.
+                  <TableCell colSpan={10} className="h-28 text-center text-muted-foreground text-xs">
+                    Tidak ada data transaksi pada periode ini.
                   </TableCell>
                 </TableRow>
               )}

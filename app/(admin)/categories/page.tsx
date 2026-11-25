@@ -84,44 +84,42 @@ export default function AdminCategoriesPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Kategori Alat</h1>
-          <p className="text-muted-foreground mt-1">Kelola pengelompokan jenis dan kategori alat.</p>
         </div>
         <Button className="bg-primary shadow-md hover:shadow-lg transition-all" onClick={openAddModal}>
           <Plus className="mr-2 h-4 w-4" /> Tambah Kategori
         </Button>
       </div>
 
-      <Card className="shadow-sm border-border/50 max-w-3xl">
-        <CardHeader className="pb-3 border-b bg-muted/20">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <FolderTree className="h-5 w-5 text-primary" /> Daftar Kategori
+      <Card className="shadow-sm border-border/50 !gap-0 !py-0">
+        <CardHeader className="!py-3 !px-4 border-b bg-muted/20">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FolderTree className="h-4 w-4 text-primary" /> Daftar Kategori
           </CardTitle>
-          <CardDescription>Total {categories.length} kategori alat terdaftar di Supabase</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="py-16 text-center flex flex-col items-center justify-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Memuat data kategori...</p>
+              <p className="text-sm text-muted-foreground">Memuat data...</p>
             </div>
           ) : (
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow>
-                  <TableHead>Nama Kategori</TableHead>
-                  <TableHead className="text-right">Aksi</TableHead>
+                  <TableHead className="px-4">Nama Kategori</TableHead>
+                  <TableHead className="px-4 text-right w-[110px]">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {categories.length > 0 ? (
                   categories.map((cat) => (
                     <TableRow key={cat.id} className="hover:bg-muted/20">
-                      <TableCell className="font-medium">{cat.nama}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="px-4 font-medium">{cat.nama}</TableCell>
+                      <TableCell className="px-4 text-right">
                         <div className="flex justify-end gap-2">
                           <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEditModal(cat)}>
                             <Pencil className="h-4 w-4 text-muted-foreground" />
@@ -150,13 +148,13 @@ export default function AdminCategoriesPage() {
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
           <Card className="w-full max-w-md shadow-2xl border-primary/20">
-            <CardHeader>
+            <CardHeader className="pb-2">
               <CardTitle className="text-xl">{editId ? "Edit Kategori" : "Tambah Kategori Baru"}</CardTitle>
             </CardHeader>
             <form onSubmit={handleSave}>
-              <CardContent className="space-y-4">
-                {errorMsg && <div className="p-3 bg-red-500/10 text-red-600 rounded-md text-sm">{errorMsg}</div>}
-                <div className="space-y-2">
+              <CardContent className="space-y-3 pb-4">
+                {errorMsg && <div className="p-2.5 bg-red-500/10 text-red-600 rounded-md text-sm">{errorMsg}</div>}
+                <div className="space-y-1.5">
                   <Label>Nama Kategori</Label>
                   <Input value={nama} onChange={(e) => setNama(e.target.value)} required />
                 </div>
