@@ -78,9 +78,25 @@ export async function deleteCategory(id: string) {
     .eq("id", id)
     .single();
 
+  const { count } = await supabase
+    .from("alat")
+    .select("id", { count: "exact", head: true })
+    .eq("kategori_id", id);
+
+  if (count && count > 0) {
+    return {
+      error: `Kategori tidak dapat dihapus karena masih ada ${count} alat yang tersedia pada kategori ini.`,
+    };
+  }
+
   const { error } = await supabase.from("kategori").delete().eq("id", id);
 
   if (error) {
+    if (error.code === "23503" || error.message?.toLowerCase().includes("foreign key")) {
+      return {
+        error: "Kategori tidak dapat dihapus karena masih ada alat yang tersedia pada kategori ini.",
+      };
+    }
     return { error: error.message };
   }
 

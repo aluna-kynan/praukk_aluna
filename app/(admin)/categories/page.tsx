@@ -27,6 +27,11 @@ export default function AdminCategoriesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Delete confirmation modal state
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; nama: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
   const loadData = async () => {
     setLoading(true);
     const data = await getCategories();
@@ -76,11 +81,18 @@ export default function AdminCategoriesPage() {
     setIsSaving(false);
   };
 
-  const handleDelete = async (id: string) => {
-    if (confirm("Apakah Anda yakin ingin menghapus kategori ini?")) {
-      await deleteCategory(id);
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    setDeleteError("");
+    const res = await deleteCategory(deleteTarget.id);
+    if (res?.error) {
+      setDeleteError(res.error);
+    } else {
+      setDeleteTarget(null);
       loadData();
     }
+    setIsDeleting(false);
   };
 
   return (
@@ -124,7 +136,15 @@ export default function AdminCategoriesPage() {
                           <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEditModal(cat)}>
                             <Pencil className="h-4 w-4 text-muted-foreground" />
                           </Button>
-                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDelete(cat.id)}>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => {
+                              setDeleteError("");
+                              setDeleteTarget({ id: cat.id, nama: cat.nama });
+                            }}
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -166,6 +186,53 @@ export default function AdminCategoriesPage() {
                 </Button>
               </CardFooter>
             </form>
+          </Card>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Kategori */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => !isDeleting && setDeleteTarget(null)}
+        >
+          <Card
+            className="w-full max-w-sm shadow-2xl border-destructive/20 !gap-0 !py-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CardHeader className="!py-3 !px-4 pb-2">
+              <CardTitle className="text-lg">Hapus Kategori</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 px-4 pb-4">
+              {deleteError && (
+                <div className="p-2.5 bg-destructive/10 text-destructive rounded-md text-sm">
+                  {deleteError}
+                </div>
+              )}
+              <p className="text-sm text-muted-foreground">
+                Apakah Anda yakin ingin menghapus kategori{" "}
+                <strong className="text-foreground">{deleteTarget.nama}</strong>?
+              </p>
+            </CardContent>
+            <CardFooter className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isDeleting}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Batal
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+              >
+                {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Hapus
+              </Button>
+            </CardFooter>
           </Card>
         </div>
       )}
